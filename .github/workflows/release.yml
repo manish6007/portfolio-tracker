@@ -1,0 +1,126 @@
+# Builds the downloadable app for Windows, macOS and Linux.
+#
+# The point of this project is that the data never leaves the machine it is
+# on, so there is no server to deploy — the deliverable is a file a person
+# downloads and runs. PyInstaller can only build for the platform it runs
+# on, hence one job per operating system.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:          # so a build can be made without tagging
+
+permissions:
+  contents: write             # needed to publish the release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: PortfolioTracker-windows
+            binary: dist/PortfolioTracker.exe
+            # The name people download. Windows keeps its extension, or the
+            # machine will not run it.
+            asset: PortfolioTracker-windows.exe
+          - os: macos-latest
+            artifact: PortfolioTracker-macos
+            binary: dist/PortfolioTracker
+            asset: PortfolioTracker-macos
+          - os: ubuntu-latest
+            artifact: PortfolioTracker-linux
+            binary: dist/PortfolioTracker
+            asset: PortfolioTracker-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt pyinstaller
+
+      - name: Build the application
+        run: pyinstaller --clean --noconfirm portfolio-tracker.spec
+
+      # A build that starts, serves, and stops. Catches the failure this
+      # packaging is most prone to: a module PyInstaller could not see, which
+      # only shows up at runtime and only in the bundle.
+      - name: Check that it runs
+        shell: bash
+        run: |
+          "${{ matrix.binary }}" --no-browser &
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8765/api/summary > /dev/null; then
+              echo "the built app serves the API"
+              curl -sf http://127.0.0.1:8765/ > /dev/null \
+                && echo "and the frontend"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the built app never started"; exit 1
+
+      - name: Name it after the platform it runs on
+        shell: bash
+        run: mv "${{ matrix.binary }}" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # Artifacts are not distribution: they are zipped, expire after 90 days,
+  # need repository access, and live in the Actions tab, which is not a place
+  # anyone downloading an app will look. A release is a permanent, direct
+  # download link -- which is what the README points people at.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: downloaded/*
+          fail_on_unmatched_files: true
+          body: |
+            Download the one file for your machine, and run it. Nothing to
+            install — no Python, no Node, no admin rights.
+
+            | Your machine | Download |
+            |---|---|
+            | Windows | `PortfolioTracker-windows.exe` |
+            | macOS | `PortfolioTracker-macos` |
+            | Linux | `PortfolioTracker-linux` |
+
+            A window opens telling you where your data is kept, and your
+            browser opens at the app. Close that window to stop it. Your
+            portfolio never leaves your machine — the app will show you
+            exactly what it keeps and what it sends, on its Privacy page.
+
+            **The first time, your computer will warn you.** The app is not
+            code-signed, so Windows says "Windows protected your PC" (More
+            info → Run anyway) and macOS says it is from an unidentified
+            developer (right-click → Open). On macOS you may also need
+            `chmod +x PortfolioTracker-macos` before it will run.

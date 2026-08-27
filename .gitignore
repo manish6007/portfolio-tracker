@@ -1,0 +1,17 @@
+# Portfolio data, wherever it is kept. *.db is deliberately broad: a
+# PORTFOLIO_DATA_DIR pointed inside the repo must not commit someone's money.
+*.db
+*.db-wal
+*.db-shm
+backend/profiles.json
+backend/profiles/
+backend/app-config.json
+__pycache__/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+build/
+dist/
+.venv/
+*.spec.bak
+.pytest_cache/

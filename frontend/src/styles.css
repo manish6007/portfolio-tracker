@@ -1,0 +1,237 @@
+/* Palette per the validated reference dataviz palette; light + dark. */
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --good: #0ca30c;
+  --good-text: #006300;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --accent: #2a78d6;
+  /* Large -> mid -> small is an ordered risk scale, so it wears an ordinal
+     one-hue ramp rather than unrelated categorical hues. Validated in both
+     modes: lightness monotone, adjacent gaps >= 0.06, light end clears the
+     surface. International sits off that scale and takes its own hue,
+     checked for separation against the ramp (CVD dE 19). */
+  --cap-large: #86b6ef;
+  --cap-mid: #2a78d6;
+  --cap-small: #104281;
+  --cap-international: #eb6834;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --good-text: #0ca30c;
+    --accent: #3987e5;
+    --cap-large: #9ec5f4;
+    --cap-mid: #3987e5;
+    --cap-small: #184f95;
+    --cap-international: #d95926;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+a { color: var(--accent); }
+
+.topbar {
+  display: flex; align-items: center; gap: 20px;
+  padding: 10px 20px; background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10; flex-wrap: wrap;
+}
+.topbar nav { display: flex; gap: 4px; flex-wrap: wrap; }
+.topbar nav button {
+  background: none; border: none; padding: 7px 12px; border-radius: 8px;
+  font: inherit; color: var(--text-secondary); cursor: pointer;
+}
+.topbar nav button.active {
+  background: var(--accent); color: #fff;
+}
+.topbar nav button:hover:not(.active) { background: var(--grid); }
+
+.page { max-width: 1200px; margin: 0 auto; padding: 20px; }
+.grid { display: grid; gap: 16px; }
+.cols-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.cols-4 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px;
+}
+.stat .label { color: var(--text-secondary); font-size: 12px; }
+.stat .value { font-size: 26px; font-weight: 650; margin-top: 2px; }
+.stat .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.stat .value.pos { color: var(--good-text); }
+.stat .value.neg { color: var(--critical); }
+
+table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.data th {
+  text-align: left; color: var(--muted); font-weight: 500;
+  border-bottom: 1px solid var(--baseline); padding: 6px 8px;
+}
+table.data td { padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+table.data td.num, table.data th.num {
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+table.data tr:hover td { background: color-mix(in oklab, var(--grid) 40%, transparent); }
+
+form.stack { display: grid; gap: 10px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+label.field { display: grid; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+input, select, textarea {
+  font: inherit; color: var(--text-primary);
+  background: var(--page); border: 1px solid var(--baseline);
+  border-radius: 8px; padding: 7px 10px; min-width: 0;
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+button.btn {
+  font: inherit; border: none; border-radius: 8px; padding: 8px 14px;
+  background: var(--accent); color: #fff; cursor: pointer;
+}
+button.btn.secondary {
+  background: none; color: var(--text-primary); border: 1px solid var(--baseline);
+}
+button.btn.danger { background: var(--critical); }
+button.btn:disabled { opacity: 0.5; cursor: default; }
+button.icon {
+  background: none; border: none; cursor: pointer; color: var(--muted);
+  font-size: 14px; padding: 2px 6px;
+}
+button.icon:hover { color: var(--critical); }
+
+.sugg { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--grid); }
+.sugg:last-child { border-bottom: none; }
+.sugg .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; }
+.sugg .p1 { background: var(--critical); }
+.sugg .p2 { background: var(--warning); border: 1px solid var(--baseline); }
+.sugg .p3 { background: var(--good); }
+.sugg b { display: block; }
+.sugg span { color: var(--text-secondary); }
+
+.notice {
+  padding: 10px 14px; border-radius: 8px; margin-bottom: 14px;
+  background: color-mix(in oklab, var(--accent) 12%, var(--surface-1));
+  border: 1px solid var(--border);
+}
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+pre.export {
+  background: var(--page); border: 1px solid var(--grid); border-radius: 8px;
+  padding: 12px; max-height: 420px; overflow: auto; font-size: 12px;
+  white-space: pre-wrap;
+}
+.legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* ---- in-app user guide ---- */
+.help-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.help-panel {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 14px; width: min(980px, 100%); max-height: 90vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.help-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.help-body { display: flex; min-height: 0; flex: 1; }
+.help-nav {
+  display: flex; flex-direction: column; gap: 2px; padding: 12px;
+  border-right: 1px solid var(--border); min-width: 190px;
+  overflow-y: auto;
+}
+.help-nav button {
+  background: none; border: none; text-align: left; font: inherit;
+  color: var(--text-secondary); padding: 8px 10px; border-radius: 8px;
+  cursor: pointer;
+}
+.help-nav button:hover { background: var(--grid); }
+.help-nav button.active { background: var(--accent); color: #fff; }
+.help-content { padding: 16px 20px; overflow-y: auto; flex: 1; }
+.help-content ul { margin: 6px 0 0; padding-left: 20px; }
+.help-content li { margin-bottom: 6px; color: var(--text-secondary); }
+button.info {
+  background: none; border: 1px solid var(--baseline); color: var(--text-secondary);
+  width: 28px; height: 28px; border-radius: 50%; cursor: pointer;
+  font-size: 14px; line-height: 1; display: inline-flex;
+  align-items: center; justify-content: center; flex: none;
+}
+button.info:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+@media (max-width: 700px) {
+  .help-body { flex-direction: column; }
+  .help-nav { flex-direction: row; overflow-x: auto; border-right: none;
+    border-bottom: 1px solid var(--border); min-width: 0; }
+}
+
+/* ---- profile switcher ---- */
+.profile-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px 3px 10px; border-radius: 999px;
+  border: 1px solid var(--baseline); background: var(--page);
+}
+.profile-chip select {
+  border: none; background: none; padding: 2px 4px; font-size: 13px;
+  color: var(--text-primary);
+}
+/* A demo profile is marked, so "whose numbers are these" is never a guess. */
+.profile-chip.demo {
+  border-color: var(--warning);
+  background: color-mix(in oklab, var(--warning) 16%, var(--surface-1));
+}
+
+/* A notice that is a problem to act on, not information. */
+.notice.warn {
+  background: color-mix(in oklab, var(--warning) 18%, var(--surface-1));
+  border-color: color-mix(in oklab, var(--warning) 45%, var(--border));
+}
+.notice code {
+  background: var(--page); border-radius: 4px; padding: 1px 5px;
+  font-size: 12px;
+}

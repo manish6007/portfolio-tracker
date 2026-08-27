@@ -1,0 +1,10 @@
+# One place for the tool settings, so CI, a contributor's terminal and an
+# editor all agree. There is no package to build here -- the app is run from
+# this directory -- so this file configures tools only.
+
+[tool.pytest.ini_options]
+# Tests import `analytics`, `db`, `config` directly; without this they only
+# resolve when pytest happens to be invoked from inside backend/.
+pythonpath = ["."]
+testpaths = ["."]
+addopts = "-q"
