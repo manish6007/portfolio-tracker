@@ -13,8 +13,8 @@ it.
 ## 1. Vision & Goals
 
 - **One dashboard** for total net worth across every asset class the household owns.
-- **Household view**: my folios + wife's investments, tagged by owner, viewable
-  together or separately.
+- **Household view**: every member's folios and investments, tagged by owner,
+  viewable together or separately.
 - **Cashflow intelligence**: salary in, expenses out, EMIs, SIPs — surface the
   *monthly investible surplus* and suggest where it should go based on target
   asset allocation.
