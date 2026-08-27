@@ -13,7 +13,7 @@ that never leaves it.
 > and what to do when something goes wrong — assuming nothing.
 
 **Stack**: FastAPI + SQLite backend, React (Vite) + Recharts frontend.
-See [PLAN.md](PLAN.md) for the original product plan.
+See [docs/PLAN.md](docs/PLAN.md) for the original product plan.
 
 ---
 
@@ -522,6 +522,6 @@ Considered and deliberately deferred:
   for personal use.
 
 If you plan to share this with others or charge for it, read the compliance
-notes in [PLAN.md](PLAN.md) first: personalised investment advice for a fee is
-regulated by SEBI, and holding other people's financial data brings the DPDP
-Act into scope.
+notes in [docs/PLAN.md](docs/PLAN.md) first: personalised investment advice
+for a fee is regulated by SEBI, and holding other people's financial data
+brings the DPDP Act into scope.

@@ -4,8 +4,9 @@ A single place to track the complete financial life of a household (self + spous
 investments, liabilities, cashflow, and savings opportunities — with an exportable
 PDF snapshot that can be fed to Claude (or any AI) for optimization suggestions.
 
-Built first for personal use, then hardened for sharing with friends/family, and
-finally productized for monetization.
+Built first for personal use, then hardened for sharing with friends and
+family. It runs on the machine it is installed on; there is no service behind
+it.
 
 ---
 
@@ -78,7 +79,7 @@ finally productized for monetization.
 3. **Prompt template shipped with the export** ("You are a fee-only advisor.
    Review this portfolio for allocation drift, overlap, cost, tax efficiency…")
    so the user gets consistent, high-quality reviews from Claude.
-4. Later (paid tier): built-in "Ask AI" using the Claude API — the app calls
+4. Later: built-in "Ask AI" using the Claude API — the app calls
    claude-sonnet-5/claude-fable-5 directly with the anonymized snapshot, renders
    the review in-app, and keeps a history of past reviews to track whether
    suggestions were acted on.
@@ -97,9 +98,9 @@ Phase the pain of data entry:
    - Broker tradebook CSVs (Zerodha/Groww/Upstox formats).
 3. **Automatic prices, manual balances**: NAVs (AMFI), stock EOD prices, gold
    rate, NPS NAV auto-refresh daily; bank/EPF balances stay manual or imported.
-4. **Account Aggregator (AA) framework** (monetization phase only): true
-   auto-sync of bank/deposits via Setu/Finvu — requires being an AA client
-   (FIU), regulatory overhead; not worth it for personal use.
+4. **Account Aggregator (AA) framework** (only if this were ever hosted as a
+   service): true auto-sync of bank/deposits via Setu/Finvu — requires being
+   an AA client (FIU), regulatory overhead; not worth it for personal use.
 
 ## 5. Architecture & Tech Stack
 
@@ -164,18 +165,16 @@ periodic balance observations instead.
 - Onboarding flow, empty states, mobile-responsive UI
 - Feedback loop with 10–20 trusted users; watch retention (do they return monthly?)
 
-**Phase 4 — Monetize**
-- **Freemium**: free = manual tracking + dashboard; paid (₹99–199/mo or
-  ₹999–1499/yr) = CAS auto-import, AI reviews in-app, tax reports, goal tracking,
-  family sharing.
-- Alternatives: one-time lifetime price (India converts better), B2B2C via
-  fee-only advisors (they manage clients on it), affiliate income (direct-plan
-  platforms, FD marketplaces) — only with disclosure.
-- Competition to study: INDmoney, ET Money, Kuvera, Zerodha console, MProfit,
-  Fold Money. Your wedge = household-level view + AI optimization loop +
-  privacy-first (no data selling, no cross-selling).
+Anything beyond that — hosting it as a service, charging for it — is out of
+scope here, and section 8 is the reason to read before going near it.
 
-## 8. Risks & Compliance (before monetizing in India)
+Competition worth studying either way: INDmoney, ET Money, Kuvera, Zerodha
+Console, MProfit, Fold Money. What this does that they do not: a
+household-level view, an AI optimization loop, and privacy-first by
+construction — no data selling, no cross-selling, and nothing leaving the
+machine.
+
+## 8. Risks & Compliance (before sharing this in India)
 
 - **Investment advice is regulated (SEBI RIA)**: rule-based nudges and AI
   "educational analysis" must be clearly disclaimed as not investment advice;
@@ -193,7 +192,6 @@ periodic balance observations instead.
 - Phase 1–2: you update it monthly for 3 consecutive months; export→Claude
   review actually changes an investment decision at least once.
 - Phase 3: ≥50% of invited users active in month 2.
-- Phase 4: conversion to paid ≥3–5%, churn <5%/mo.
 
 ## 10. Immediate Next Steps
 
