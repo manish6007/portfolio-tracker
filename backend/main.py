@@ -1558,13 +1558,14 @@ def calc_sip(body: schemas.SipIn):
         target_plan = _calc(
             calculators.sip_for_target, target=body.target,
             annual_return_pct=body.annual_return_pct, years=body.years,
-            step_up_pct=body.step_up_pct, lumpsum=body.lumpsum)
+            step_up_pct=body.step_up_pct, lumpsum=body.lumpsum,
+            rate_mode=body.rate_mode)
         monthly = target_plan["monthly"]
 
     result = _calc(calculators.sip, monthly=monthly,
                    annual_return_pct=body.annual_return_pct, years=body.years,
                    step_up_pct=body.step_up_pct, lumpsum=body.lumpsum,
-                   inflation_pct=body.inflation_pct)
+                   inflation_pct=body.inflation_pct, rate_mode=body.rate_mode)
     result["target_plan"] = target_plan
     result["notes"] = calculators.notes(result, "sip")
     return result
@@ -1582,11 +1583,11 @@ def calc_swp(body: schemas.SwpIn):
                    monthly_withdrawal=body.monthly_withdrawal,
                    annual_return_pct=body.annual_return_pct, years=body.years,
                    step_up_pct=body.step_up_pct,
-                   inflation_pct=body.inflation_pct)
+                   inflation_pct=body.inflation_pct, rate_mode=body.rate_mode)
     result["sustainable"] = _calc(
         calculators.swp_sustainable, corpus=body.corpus,
         annual_return_pct=body.annual_return_pct, years=body.years,
-        step_up_pct=body.step_up_pct)
+        step_up_pct=body.step_up_pct, rate_mode=body.rate_mode)
     result["notes"] = calculators.notes(result, "swp")
     return result
 

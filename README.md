@@ -367,10 +367,24 @@ or writes the portfolio.
 | **SWP** | Whether a corpus survives a monthly withdrawal, the year it runs out if not, and the largest withdrawal that would have lasted. |
 
 Set the yearly increase on both: to your pay rise on a SIP, to inflation on an
-SWP. Conventions, since calculators disagree: the monthly rate is the annual
-rate ÷ 12 (what every Indian calculator you will compare against uses), SIP
-instalments go in at the start of the month, and SWP withdrawals come out at
-the start of the month, before that month's growth.
+SWP. The SWP also states what your withdrawal is as an annual rate on the
+opening corpus — the figure that says at a glance whether this is a 4% plan
+or a 9% one.
+
+**The monthly rate is on the page, and switchable**, because calculators
+disagree about it by enough to matter. The default is the *compounded* rate,
+(1+r)^(1/12)−1, so twelve months compound to exactly the annual figure you
+typed; that is Excel's `NOMINAL(rate,12)/12` and what the planning workbooks
+this was reconciled against use in every rate cell. The alternative, annual ÷
+12, is what most online Indian calculators use — it is one click away so a
+cross-check against one of them is like for like, but it is not the default,
+because at 15% over twenty years it reports about 14% more money than the
+same assumption honestly compounded.
+
+The other conventions: SIP instalments go in at the start of the month, SWP
+withdrawals come out at the start of the month before that month's growth,
+and step-ups apply on twelve-month boundaries. `backend/test_calculators.py`
+pins all of this to cell values read straight out of those workbooks.
 
 Neither models a variable return or tax, and both say so on the page. The
 order returns arrive in matters most while withdrawing, and that is the one
@@ -537,7 +551,7 @@ misspelled field is rejected instead of silently ignored, and
 CI runs both, plus a frontend build, on every push and pull request — see
 `.github/workflows/ci.yml`.
 
-343 tests. The pure analytics, FI and calculator modules, the importers,
+354 tests. The pure analytics, FI and calculator modules, the importers,
 profiles, privacy — and `test_api.py`, which goes through HTTP rather than around it,
 because the host check, the CORS configuration, profile selection from the
 cookie and the session lifecycle only exist on the request path.

@@ -7,11 +7,17 @@ different module: nothing here touches the database.
 
 **Conventions, stated because calculators disagree about them.**
 
-* The monthly rate is the annual rate divided by twelve. Compounding the
-  effective rate instead -- (1+r)^(1/12)-1 -- is arguably more correct and
-  gives a slightly smaller answer, but every SIP calculator an Indian
-  investor will compare this against uses annual/12, and a figure that
-  disagrees with all of them reads as a bug rather than as rigour.
+* **The monthly rate is the effective one, (1+r)^(1/12)-1**, so that twelve
+  months of it compound to exactly the annual rate typed in. Excel spells
+  this NOMINAL(rate,12)/12, which is what the planning workbooks this was
+  reconciled against use in every rate cell they have.
+
+  The alternative -- annual/12 -- is what most online Indian calculators
+  use, and it is available as `rate_mode="simple"` so a cross-check against
+  one of them can be made like for like. It is not the default because it
+  is not neutral: at 15% over twenty years it reports 14% more money than
+  the same assumption honestly compounded, and a calculator that flatters
+  the plan by a seventh is worse than useless.
 * A SIP instalment goes in at the **start** of the month, so it earns that
   month's return. This is the ordinary Indian convention and matches the
   standard formula FV = P x [((1+i)^n - 1) / i] x (1+i).
@@ -47,13 +53,27 @@ def _months(years):
     return min(months, MAX_MONTHS)
 
 
-def _monthly_rate(annual_pct):
-    return float(annual_pct) / 100.0 / 12.0
+RATE_EFFECTIVE, RATE_SIMPLE = "effective", "simple"
+RATE_MODES = (RATE_EFFECTIVE, RATE_SIMPLE)
+
+
+def _monthly_rate(annual_pct, mode=RATE_EFFECTIVE):
+    """The monthly rate implied by an annual one. See the module docstring."""
+    annual = float(annual_pct) / 100.0
+    if mode == RATE_SIMPLE:
+        return annual / 12.0
+    if mode != RATE_EFFECTIVE:
+        raise ValueError("Unknown rate convention: %r" % (mode,))
+    if annual <= -1:
+        # A total loss compounds to a total loss; the twelfth root of a
+        # non-positive number is not a rate at all.
+        return -1.0
+    return (1.0 + annual) ** (1.0 / 12.0) - 1.0
 
 
 def sip(monthly, annual_return_pct=DEFAULT_RETURN, years=10, *,
         step_up_pct=DEFAULT_STEP_UP, lumpsum=0.0,
-        inflation_pct=DEFAULT_INFLATION):
+        inflation_pct=DEFAULT_INFLATION, rate_mode=RATE_EFFECTIVE):
     """Grow a monthly instalment (and any opening lumpsum) for `years`.
 
     Returns yearly rows plus the totals. `invested` is money in, `value` is
@@ -68,7 +88,7 @@ def sip(monthly, annual_return_pct=DEFAULT_RETURN, years=10, *,
         raise ValueError("Enter a monthly amount, a lumpsum, or both.")
 
     n = _months(years)
-    rate = _monthly_rate(annual_return_pct)
+    rate = _monthly_rate(annual_return_pct, rate_mode)
     step = 1 + float(step_up_pct) / 100.0
 
     balance, invested, instalment = lumpsum, lumpsum, monthly
@@ -108,12 +128,15 @@ def sip(monthly, annual_return_pct=DEFAULT_RETURN, years=10, *,
             "step_up_pct": float(step_up_pct),
             "inflation_pct": float(inflation_pct),
             "years": round(n / 12.0, 4),
+            "rate_mode": rate_mode,
+            "monthly_rate_pct": round(rate * 100, 6),
         },
     }
 
 
 def sip_for_target(target, annual_return_pct=DEFAULT_RETURN, years=10, *,
-                   step_up_pct=DEFAULT_STEP_UP, lumpsum=0.0):
+                   step_up_pct=DEFAULT_STEP_UP, lumpsum=0.0,
+                   rate_mode=RATE_EFFECTIVE):
     """The monthly instalment that reaches `target` -- the question people
     actually have.
 
@@ -127,7 +150,7 @@ def sip_for_target(target, annual_return_pct=DEFAULT_RETURN, years=10, *,
         raise ValueError("The target must be more than zero.")
 
     n = _months(years)
-    rate = _monthly_rate(annual_return_pct)
+    rate = _monthly_rate(annual_return_pct, rate_mode)
     step = 1 + float(step_up_pct) / 100.0
 
     # What the lumpsum alone becomes, and what a 1/month SIP becomes.
@@ -156,7 +179,8 @@ def sip_for_target(target, annual_return_pct=DEFAULT_RETURN, years=10, *,
 
 
 def swp(corpus, monthly_withdrawal, annual_return_pct=DEFAULT_RETURN, years=25,
-        *, step_up_pct=DEFAULT_STEP_UP, inflation_pct=DEFAULT_INFLATION):
+        *, step_up_pct=DEFAULT_STEP_UP, inflation_pct=DEFAULT_INFLATION,
+        rate_mode=RATE_EFFECTIVE):
     """Draw `monthly_withdrawal` from `corpus` and see whether it lasts.
 
     The number that matters is not the ending balance, it is the month the
@@ -177,7 +201,7 @@ def swp(corpus, monthly_withdrawal, annual_return_pct=DEFAULT_RETURN, years=25,
         raise ValueError("Enter a monthly withdrawal.")
 
     n = _months(years)
-    rate = _monthly_rate(annual_return_pct)
+    rate = _monthly_rate(annual_return_pct, rate_mode)
     step = 1 + float(step_up_pct) / 100.0
 
     balance, withdrawn, want = corpus, 0.0, monthly_withdrawal
@@ -220,12 +244,20 @@ def swp(corpus, monthly_withdrawal, annual_return_pct=DEFAULT_RETURN, years=25,
             "step_up_pct": float(step_up_pct),
             "inflation_pct": float(inflation_pct),
             "years": round(n / 12.0, 4),
+            "rate_mode": rate_mode,
+            "monthly_rate_pct": round(rate * 100, 6),
+            # The withdrawal as an annual rate on the opening corpus -- the
+            # "SWP factor" a planner states, and the figure that says at a
+            # glance whether this is a 4% plan or a 9% one.
+            "withdrawal_rate_pct": round(
+                monthly_withdrawal * 12 / corpus * 100, 2),
         },
     }
 
 
 def swp_sustainable(corpus, annual_return_pct=DEFAULT_RETURN, years=25, *,
-                    step_up_pct=DEFAULT_STEP_UP, tolerance=1.0):
+                    step_up_pct=DEFAULT_STEP_UP, tolerance=1.0,
+                    rate_mode=RATE_EFFECTIVE):
     """The largest first withdrawal the corpus survives for the whole period.
 
     Bisection rather than a closed form, because the step-up makes the
@@ -242,7 +274,7 @@ def swp_sustainable(corpus, annual_return_pct=DEFAULT_RETURN, years=25, *,
 
     def survives(amount):
         return swp(corpus, amount, annual_return_pct, n / 12.0,
-                   step_up_pct=step_up_pct)["survives"]
+                   step_up_pct=step_up_pct, rate_mode=rate_mode)["survives"]
 
     lo, hi = 0.0, corpus                    # taking the lot in month one fails
     if survives(hi):                        # a return so high it never depletes

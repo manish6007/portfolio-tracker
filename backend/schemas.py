@@ -17,7 +17,7 @@ Two conventions worth knowing:
   an error, not a field that quietly does nothing. The exception is import
   rows, which carry whatever the parser produced.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -312,6 +312,7 @@ class ApplyCodes(Strict):
 # is a typo, not a portfolio.
 class SipIn(Strict):
     monthly: float = Field(0, ge=0, le=1e9)
+    rate_mode: Literal["effective", "simple"] = "effective"
     lumpsum: float = Field(0, ge=0, le=1e12)
     annual_return_pct: float = Field(12.0, ge=-50, le=100)
     years: float = Field(10, gt=0, le=60)
@@ -330,6 +331,7 @@ class SipIn(Strict):
 
 class SwpIn(Strict):
     corpus: float = Field(gt=0, le=1e12)
+    rate_mode: Literal["effective", "simple"] = "effective"
     monthly_withdrawal: float = Field(gt=0, le=1e9)
     annual_return_pct: float = Field(8.0, ge=-50, le=100)
     years: float = Field(25, gt=0, le=60)

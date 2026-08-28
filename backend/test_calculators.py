@@ -5,8 +5,13 @@ import calculators as c
 
 
 def _fv_sip(p, annual_pct, years):
-    """Textbook SIP future value, instalment at the start of the month."""
-    i = annual_pct / 100.0 / 12.0
+    """Textbook SIP future value, instalment at the start of the month.
+
+    The monthly rate comes from the module so this stays a check of the
+    *series* formula, not a second opinion on the rate convention -- which
+    has its own tests below.
+    """
+    i = c._monthly_rate(annual_pct)
     n = years * 12
     return p * (((1 + i) ** n - 1) / i) * (1 + i)
 
@@ -29,9 +34,10 @@ def test_zero_return_grows_nothing():
     assert r["gain"] == pytest.approx(0)
 
 
-def test_lumpsum_alone_compounds_monthly():
+def test_a_year_of_the_effective_rate_is_exactly_the_annual_rate():
+    """The whole point of the convention: 12% a year means 12% after a year."""
     r = c.sip(0, 12, 1, lumpsum=100000)
-    assert r["value"] == pytest.approx(100000 * (1.01 ** 12))
+    assert r["value"] == pytest.approx(112000, abs=0.01)
     assert r["invested"] == pytest.approx(100000)
 
 
@@ -156,16 +162,18 @@ def test_withdrawing_exactly_the_growth_leaves_the_corpus_intact():
     does not earn. Getting this wrong by one compounding period is the
     classic SWP-calculator bug, so it is pinned here.
     """
-    i = 0.12 / 12
+    i = c._monthly_rate(12)
     perpetual = 10000000 * i / (1 + i)
     r = c.swp(10000000, perpetual, 12, 30)
     assert r["survives"] is True
     assert r["ending_balance"] == pytest.approx(10000000, rel=1e-6)
 
 
-def test_drawing_the_full_monthly_return_slowly_erodes_the_corpus():
-    """One rupee more than perpetual, and it is a decaying plan, not a flat one."""
-    r = c.swp(10000000, 100000, 12, 30)
+def test_drawing_more_than_perpetual_slowly_erodes_the_corpus():
+    """A rupee over the perpetual figure, and it is a decaying plan."""
+    i = c._monthly_rate(12)
+    perpetual = 10000000 * i / (1 + i)
+    r = c.swp(10000000, perpetual + 1, 12, 30)
     assert r["ending_balance"] < 10000000
 
 
@@ -226,3 +234,62 @@ def test_inr_groups_the_indian_way():
     assert c._inr(12345678) == "₹1,23,45,678"
     assert c._inr(0) == "₹0"
     assert c._inr(-1500) == "-₹1,500"
+
+
+# ---------------- against the planning workbooks ----------------
+# These pin the maths to four Excel planning tools the calculators were
+# reconciled against. Every rate cell in them reads =(NOMINAL(rate,12))/12,
+# and the figures below are theirs, not ours -- so a change of convention
+# here cannot pass quietly.
+def test_the_effective_monthly_rate_matches_excels_nominal():
+    # =(NOMINAL(15%,12))/12 in the workbooks' SIP sheets.
+    assert c._monthly_rate(15) == pytest.approx(0.01171491691985338, abs=1e-15)
+    # =(NOMINAL(12%,12))/12 in the retirement sheets.
+    assert c._monthly_rate(12) == pytest.approx(0.009488792934583046, abs=1e-15)
+
+
+def test_the_simple_convention_is_still_available_for_cross_checks():
+    assert c._monthly_rate(12, c.RATE_SIMPLE) == pytest.approx(0.01)
+
+
+def test_an_unknown_convention_is_refused_rather_than_guessed():
+    with pytest.raises(ValueError):
+        c._monthly_rate(12, "annualised-ish")
+
+
+def test_a_total_loss_does_not_take_a_root_of_a_negative():
+    assert c._monthly_rate(-100) == -1.0
+    assert c.sip(1000, -100, 2)["value"] == pytest.approx(0)
+
+
+def test_sip_matches_the_workbook_month_by_month():
+    """SIP-WC: 10,000/month at 15% p.a."""
+    r = c.sip(10000, 15, 1)
+    assert r["rows"][-1]["value"] == pytest.approx(129541.8811556358, abs=0.01)
+
+
+def test_swp_matches_the_workbook_month_by_month():
+    """RP-SWP: 2 Cr at 12% p.a., 1,00,000/month rising 6.5% a year.
+
+    Month 12 and month 24 are read straight off the sheet; month 13 is the
+    first at the stepped-up 1,06,500, which is what pins the step-up to
+    twelve-month boundaries rather than to a rolling year.
+    """
+    r = c.swp(20000000, 100000, 12, 2, step_up_pct=6.5)
+    year_end = {row["month"]: row for row in r["rows"]}
+    assert year_end[12]["balance"] == pytest.approx(21123350.209164705, abs=0.01)
+    assert year_end[24]["balance"] == pytest.approx(22298520.20702487, abs=0.01)
+    assert year_end[12]["monthly_withdrawal"] == pytest.approx(106500)
+
+
+def test_the_swp_reports_its_withdrawal_rate():
+    """The workbooks' "SWP FACTOR": 0.5% a month is a 6%-a-year plan."""
+    r = c.swp(20000000, 100000, 12, 25)
+    assert r["assumptions"]["withdrawal_rate_pct"] == pytest.approx(6.0)
+
+
+def test_the_simple_convention_overstates_the_same_assumption():
+    """Why `effective` is the default and not merely an option."""
+    honest = c.sip(10000, 15, 20)["value"]
+    flattering = c.sip(10000, 15, 20, rate_mode=c.RATE_SIMPLE)["value"]
+    assert flattering > honest * 1.13

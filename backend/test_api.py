@@ -1148,3 +1148,26 @@ def test_the_calculators_need_no_profile_or_data(client):
                        ("/api/calc/swp", {"corpus": 100000,
                                           "monthly_withdrawal": 500})):
         assert client.post(path, json=body).status_code == 200
+
+
+def test_the_rate_convention_is_effective_unless_asked_otherwise(client):
+    r = client.post("/api/calc/sip", json={"monthly": 10000, "years": 1,
+                                           "annual_return_pct": 15})
+    body = r.json()
+    assert body["assumptions"]["rate_mode"] == "effective"
+    # The workbooks' own month-12 figure for this exact plan.
+    assert body["value"] == pytest.approx(129541.88, abs=0.01)
+
+
+def test_the_simple_convention_can_be_asked_for(client):
+    r = client.post("/api/calc/sip", json={"monthly": 10000, "years": 1,
+                                           "annual_return_pct": 15,
+                                           "rate_mode": "simple"})
+    assert r.status_code == 200
+    assert r.json()["value"] > 129541.88
+
+
+def test_an_invented_rate_convention_is_rejected(client):
+    r = client.post("/api/calc/sip", json={"monthly": 10000,
+                                           "rate_mode": "vibes"})
+    assert r.status_code == 422

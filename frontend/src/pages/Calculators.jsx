@@ -31,6 +31,28 @@ function Stat({ label, value, sub, tone }) {
   )
 }
 
+// The convention is on the page, not buried in a docstring: two calculators
+// can disagree by a seventh over twenty years and both be "right", so which
+// one is running has to be visible and switchable.
+function RateBasis({ mode, onMode, assumptions }) {
+  const rate = assumptions?.monthly_rate_pct
+  return (
+    <p className="small muted" style={{ margin: '10px 0 0' }}>
+      Monthly rate:{' '}
+      <span className="seg" style={{ verticalAlign: 'middle' }}>
+        <button className={mode === 'effective' ? 'active' : ''}
+          onClick={() => onMode('effective')}>compounded</button>
+        <button className={mode === 'simple' ? 'active' : ''}
+          onClick={() => onMode('simple')}>annual ÷ 12</button>
+      </span>{' '}
+      {rate != null && <>= <b>{rate.toFixed(4)}%</b> a month. </>}
+      {mode === 'effective'
+        ? 'Twelve of these compound to exactly the annual figure you typed — what Excel’s NOMINAL() gives, and what planning workbooks use.'
+        : 'What most online calculators use. It overstates the same assumption — by about a seventh at 15% over twenty years — so use it only to compare like with like against one of them.'}
+    </p>
+  )
+}
+
 function Notes({ notes }) {
   if (!notes?.length) return null
   return (
@@ -48,6 +70,7 @@ function Sip() {
     annual_return_pct: '12', years: '10', step_up_pct: '10',
     inflation_pct: '6',
   })
+  const [rateMode, setRateMode] = useState('effective')
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
 
@@ -55,6 +78,7 @@ function Sip() {
 
   const run = useCallback(async () => {
     const body = {
+      rate_mode: rateMode,
       lumpsum: num(f.lumpsum) || 0,
       annual_return_pct: num(f.annual_return_pct),
       years: num(f.years),
@@ -67,7 +91,7 @@ function Sip() {
       setData(await api.post('/api/calc/sip', body))
       setErr('')
     } catch (e) { setErr(e.message); setData(null) }
-  }, [f, mode])
+  }, [f, mode, rateMode])
 
   useEffect(() => { run() }, [run])
 
@@ -107,6 +131,8 @@ function Sip() {
             onChange={set('inflation_pct')} min="0" step="0.5" suffix="% a year"
             hint="used for the today's-money figure" />
         </div>
+        <RateBasis mode={rateMode} onMode={setRateMode}
+          assumptions={data?.assumptions} />
       </div>
 
       {err && <div className="notice">{err}</div>}
@@ -190,6 +216,7 @@ function Swp({ summary }) {
     annual_return_pct: '8', years: '25', step_up_pct: '6',
     inflation_pct: '6',
   })
+  const [rateMode, setRateMode] = useState('effective')
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
 
@@ -198,6 +225,7 @@ function Swp({ summary }) {
   const run = useCallback(async () => {
     try {
       setData(await api.post('/api/calc/swp', {
+        rate_mode: rateMode,
         corpus: num(f.corpus),
         monthly_withdrawal: num(f.monthly_withdrawal),
         annual_return_pct: num(f.annual_return_pct),
@@ -207,7 +235,7 @@ function Swp({ summary }) {
       }))
       setErr('')
     } catch (e) { setErr(e.message); setData(null) }
-  }, [f])
+  }, [f, rateMode])
 
   useEffect(() => { run() }, [run])
 
@@ -238,6 +266,8 @@ function Swp({ summary }) {
             onChange={set('inflation_pct')} min="0" step="0.5" suffix="% a year"
             hint="used for the today's-money figure" />
         </div>
+        <RateBasis mode={rateMode} onMode={setRateMode}
+          assumptions={data?.assumptions} />
         {mine > 0 && (
           <p className="small muted" style={{ marginBottom: 0 }}>
             Your portfolio is worth {inr(mine)} today.{' '}
@@ -267,7 +297,8 @@ function Swp({ summary }) {
               sub={data.sustainable.unbounded
                 ? 'the return covers any withdrawal at this length'
                 : `the most that lasts the full ${f.years} years`} />
-            <Stat label="Total taken out" value={inr(data.total_withdrawn)} />
+            <Stat label="Total taken out" value={inr(data.total_withdrawn)}
+              sub={`you started by drawing ${data.assumptions.withdrawal_rate_pct}% a year`} />
             {data.survives && (
               <Stat label="Left at the end" value={inr(data.ending_balance)}
                 sub={`${inr(data.ending_balance_real)} in today's money`} />
