@@ -112,6 +112,27 @@ const SECTIONS = [
     ],
   },
   {
+    id: 'calculators',
+    title: 'Calculators',
+    body: [
+      ['What they are',
+        ['What-ifs on numbers you type. Nothing on this page reads or changes your portfolio, so try anything.',
+          'The FI page answers a question about your actual money; these answer one about a plan you are considering. That is why they are separate.']],
+      ['SIP — building it up',
+        ['“What will my SIP become?” grows an instalment, and any opening lumpsum, at the return you choose.',
+          '“What SIP do I need?” runs it backwards: name the amount you want and the years you have, and it gives the monthly figure — rounded up, because under-funding a goal is the wrong way to be wrong.',
+          'Set the yearly increase to your expected pay rise. A flat instalment for twenty years is a real-terms cut, and the difference at the end is large.',
+          'The chart is stacked: your own money below, growth above. The year the upper band overtakes the lower is the year compounding starts doing more work than you do.']],
+      ['SWP — drawing it down',
+        ['Ask whether a corpus survives a monthly withdrawal, and for how long. “Safe to withdraw” is the largest first withdrawal that lasts the whole period.',
+          'Set the yearly increase to inflation. Withdrawing the same rupees for thirty years is a plan that quietly gets poorer; the honest question is whether it survives a rising cost of living.',
+          'Withdrawals come out at the start of each month, before that month’s growth — the conservative reading.']],
+      ['What they do not model',
+        ['A steady return. Real markets deliver the same average in a different order, and while withdrawing that works against you: a bad early year sells more units to raise the same rupees.',
+          'Tax. Every SWP instalment is a redemption, and equity gains above the annual exemption are taxed on each one.']],
+    ],
+  },
+  {
     id: 'export',
     title: 'Export & family record',
     body: [

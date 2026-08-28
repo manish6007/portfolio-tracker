@@ -96,6 +96,16 @@ projection runs accumulation and drawdown on one timeline. Goals (a car, a
 child's education) are modelled as withdrawals from the same corpus, so you
 can see what each one costs in FI years.
 
+### Plan a SIP, or a retirement income
+Two calculators on numbers you type, touching nothing you own. **SIP** grows
+an instalment — and runs backwards, which is the version that changes
+behaviour: name the amount you need and the years you have, and it gives the
+monthly figure. **SWP** asks whether a corpus survives a monthly withdrawal
+and reports the largest one that lasts the whole period. Both take a yearly
+increase, because a flat instalment for twenty years is a real-terms cut and
+a flat withdrawal is a retirement that quietly gets poorer. Both state what
+they cannot model: a steady return, and tax.
+
 ### Check your cover
 An insurance register with sum assured, premium, renewal date and nominee,
 plus a cover-adequacy check against the conventional 12× income plus
@@ -344,6 +354,28 @@ chart shows corpus against a rising FI target with a band across the 9–15%
 range; **today's money is the default view** because nominal figures flatter
 the plan.
 
+### Calculators
+
+Separate from FI on purpose: the FI page answers a question about your actual
+money, these answer one about a plan you are weighing up. Nothing here reads
+or writes the portfolio.
+
+| | What it answers |
+|---|---|
+| **SIP → what will it become** | An instalment plus any lumpsum, grown at a chosen return. The chart stacks your own money below and growth above; where the upper band overtakes the lower is where compounding starts doing more work than you do. |
+| **SIP → what do I need** | The monthly figure that reaches a named amount in a named number of years, rounded **up** — under-funding a goal is the wrong way to be wrong. |
+| **SWP** | Whether a corpus survives a monthly withdrawal, the year it runs out if not, and the largest withdrawal that would have lasted. |
+
+Set the yearly increase on both: to your pay rise on a SIP, to inflation on an
+SWP. Conventions, since calculators disagree: the monthly rate is the annual
+rate ÷ 12 (what every Indian calculator you will compare against uses), SIP
+instalments go in at the start of the month, and SWP withdrawals come out at
+the start of the month, before that month's growth.
+
+Neither models a variable return or tax, and both say so on the page. The
+order returns arrive in matters most while withdrawing, and that is the one
+thing a calculator like this cannot show you.
+
 ### Privacy
 
 - **Where your data is** — the real file paths, sizes and last-written times.
@@ -505,8 +537,8 @@ misspelled field is rejected instead of silently ignored, and
 CI runs both, plus a frontend build, on every push and pull request — see
 `.github/workflows/ci.yml`.
 
-299 tests. The pure analytics and FI modules, the importers, profiles,
-privacy — and `test_api.py`, which goes through HTTP rather than around it,
+343 tests. The pure analytics, FI and calculator modules, the importers,
+profiles, privacy — and `test_api.py`, which goes through HTTP rather than around it,
 because the host check, the CORS configuration, profile selection from the
 cookie and the session lifecycle only exist on the request path.
 

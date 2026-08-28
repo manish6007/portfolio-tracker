@@ -235,3 +235,26 @@ button.info:hover { background: var(--accent); color: #fff; border-color: var(--
   background: var(--page); border-radius: 4px; padding: 1px 5px;
   font-size: 12px;
 }
+
+/* Segmented control: two or three mutually exclusive views of one card.
+   Not the top-bar nav — that switches pages; this switches what a page is
+   asking. Keeping them visually distinct stops the calculators from looking
+   like two more tabs in the header. */
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px;
+  background: var(--grid); flex-wrap: wrap; }
+.seg button {
+  background: none; border: none; font: inherit; font-size: 13px;
+  color: var(--text-secondary); padding: 6px 12px; border-radius: 8px;
+  cursor: pointer;
+}
+.seg button:hover:not(.active) { color: var(--text-primary); }
+.seg button.active {
+  background: var(--surface-1); color: var(--text-primary); font-weight: 550;
+}
+
+/* A button that acts on the page but should read as a link, not a control:
+   used where the sentence around it carries the meaning. */
+button.linkish {
+  background: none; border: none; padding: 0; font: inherit;
+  color: var(--accent); cursor: pointer; text-decoration: underline;
+}

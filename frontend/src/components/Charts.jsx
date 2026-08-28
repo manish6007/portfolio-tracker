@@ -371,3 +371,116 @@ export function FiChart({ rows, crossover, real, depleted }) {
     </ResponsiveContainer>
   )
 }
+
+// ---------------- calculators ----------------
+function SipTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{ ...tooltipStyle, padding: '8px 10px' }}>
+      <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>
+        Year {label}
+      </div>
+      <div><b>{inr(d.value)}</b> in total</div>
+      <div style={{ color: 'var(--text-secondary)' }}>
+        {inr(d.invested)} put in · {inr(d.gain)} growth
+      </div>
+      {d.instalment > 0 && (
+        <div style={{ color: 'var(--muted)', marginTop: 4 }}>
+          instalment now {inr(d.instalment)}/month
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Stacked, because invested + growth *is* the value — the wedge between them
+// is the whole argument for starting early, and a second line would hide it.
+export function SipChart({ rows }) {
+  if (!rows?.length) return <p className="muted">Nothing to project yet.</p>
+  return (
+    <ResponsiveContainer width="100%" height={320}>
+      <ComposedChart data={rows} margin={{ top: 8, right: 12, left: 8, bottom: 16 }}>
+        <CartesianGrid stroke="var(--grid)" vertical={false} />
+        <XAxis dataKey="year" tick={axisTick} tickLine={false}
+          axisLine={{ stroke: 'var(--baseline)' }}
+          label={{ value: 'years', position: 'insideBottom', offset: -2,
+            fill: 'var(--muted)', fontSize: 11 }} />
+        <YAxis tick={axisTick} tickFormatter={inrShort} axisLine={false}
+          tickLine={false} width={70} />
+        <Tooltip content={<SipTooltip />} cursor={{ stroke: 'var(--baseline)' }} />
+        {/* The payload is spelled out because the 2px separator between the
+            stacked fills is a *surface*-coloured stroke, and Recharts would
+            otherwise paint the legend swatch and its text that same colour --
+            white on white. Text takes a text token either way; identity is
+            carried by the swatch beside it. */}
+        <Legend wrapperStyle={{ fontSize: 12 }} verticalAlign="top"
+          align="right" height={24}
+          payload={[
+            { value: 'What you put in', type: 'square', id: 'invested',
+              color: 'var(--series-3)' },
+            { value: 'Growth', type: 'square', id: 'gain',
+              color: 'var(--series-1)' },
+          ]}
+          formatter={(v) => (
+            <span style={{ color: 'var(--text-secondary)' }}>{v}</span>
+          )} />
+        <Area type="monotone" dataKey="invested" name="What you put in"
+          stackId="1" stroke="var(--surface-1)" strokeWidth={2}
+          fill="var(--series-3)" fillOpacity={0.85} />
+        <Area type="monotone" dataKey="gain" name="Growth"
+          stackId="1" stroke="var(--surface-1)" strokeWidth={2}
+          fill="var(--series-1)" fillOpacity={0.85} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  )
+}
+
+function SwpTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{ ...tooltipStyle, padding: '8px 10px' }}>
+      <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>
+        Year {label}
+      </div>
+      <div><b>{d.balance > 0 ? inr(d.balance) : 'nothing left'}</b></div>
+      <div style={{ color: 'var(--text-secondary)' }}>
+        {inr(d.withdrawn)} taken out so far
+      </div>
+      <div style={{ color: 'var(--muted)', marginTop: 4 }}>
+        drawing {inr(d.monthly)}/month
+      </div>
+    </div>
+  )
+}
+
+// One series, so no legend box — the axis label and the title name it.
+export function SwpChart({ rows, depletedYear }) {
+  if (!rows?.length) return <p className="muted">Nothing to project yet.</p>
+  const dry = depletedYear != null
+  return (
+    <ResponsiveContainer width="100%" height={320}>
+      <ComposedChart data={rows} margin={{ top: 8, right: 12, left: 8, bottom: 16 }}>
+        <CartesianGrid stroke="var(--grid)" vertical={false} />
+        <XAxis dataKey="year" tick={axisTick} tickLine={false}
+          axisLine={{ stroke: 'var(--baseline)' }}
+          label={{ value: 'years', position: 'insideBottom', offset: -2,
+            fill: 'var(--muted)', fontSize: 11 }} />
+        <YAxis tick={axisTick} tickFormatter={inrShort} axisLine={false}
+          tickLine={false} width={70} />
+        <Tooltip content={<SwpTooltip />} cursor={{ stroke: 'var(--baseline)' }} />
+        <Area type="monotone" dataKey="balance" name="What is left"
+          stroke={dry ? 'var(--critical)' : 'var(--series-1)'} strokeWidth={2}
+          fill={dry ? 'var(--critical)' : 'var(--series-1)'} fillOpacity={0.15} />
+        {dry && (
+          <ReferenceLine x={Math.round(depletedYear)} stroke="var(--critical)"
+            strokeWidth={1.5} strokeDasharray="4 4"
+            label={{ value: `empty in year ${depletedYear}`,
+              position: 'insideTopRight', fill: 'var(--critical)',
+              fontSize: 11, offset: 8 }} />
+        )}
+      </ComposedChart>
+    </ResponsiveContainer>
+  )
+}

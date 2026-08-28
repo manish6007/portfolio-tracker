@@ -1070,3 +1070,81 @@ def test_the_launcher_reports_when_the_interface_was_built(tmp_path,
     (dist / "index.html").write_text("<html></html>")
     assert desktop.built_at() != "not built"
     assert "20" in desktop.built_at()               # a real year
+
+
+# ---------------- calculators ----------------
+def test_sip_endpoint_returns_a_projection(client):
+    r = client.post("/api/calc/sip", json={"monthly": 10000,
+                                           "annual_return_pct": 12,
+                                           "years": 10})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["invested"] == 1200000
+    assert body["value"] > body["invested"]
+    assert body["rows"][-1]["year"] == 10
+    assert any("Tax" in n for n in body["notes"])
+
+
+def test_sip_endpoint_inverts_when_given_a_target(client):
+    r = client.post("/api/calc/sip", json={"target": 5000000,
+                                           "annual_return_pct": 12,
+                                           "years": 10})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["target_plan"]["monthly"] > 0
+    # The forward projection it returns must actually reach the target.
+    assert body["value"] >= 5000000
+
+
+def test_sip_endpoint_rejects_an_empty_plan(client):
+    r = client.post("/api/calc/sip", json={"annual_return_pct": 12, "years": 10})
+    assert r.status_code == 422
+
+
+def test_sip_endpoint_rejects_an_absurd_return(client):
+    r = client.post("/api/calc/sip", json={"monthly": 1000,
+                                           "annual_return_pct": 5000,
+                                           "years": 10})
+    assert r.status_code == 422
+
+
+def test_sip_endpoint_rejects_a_misspelled_field(client):
+    r = client.post("/api/calc/sip", json={"monthly": 1000, "yrs": 10})
+    assert r.status_code == 422
+
+
+def test_swp_endpoint_reports_survival_and_the_sustainable_amount(client):
+    r = client.post("/api/calc/swp", json={"corpus": 10000000,
+                                           "monthly_withdrawal": 30000,
+                                           "annual_return_pct": 8,
+                                           "years": 25})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["survives"] is True
+    assert body["sustainable"]["monthly"] > 30000
+    assert body["rows"][0]["balance"] == 10000000
+
+
+def test_swp_endpoint_says_when_the_money_runs_out(client):
+    r = client.post("/api/calc/swp", json={"corpus": 1000000,
+                                           "monthly_withdrawal": 50000,
+                                           "annual_return_pct": 8,
+                                           "years": 25})
+    body = r.json()
+    assert body["survives"] is False
+    assert body["depleted_year"] is not None
+    assert any("runs out" in n for n in body["notes"])
+
+
+def test_swp_endpoint_rejects_a_zero_corpus(client):
+    r = client.post("/api/calc/swp", json={"corpus": 0,
+                                           "monthly_withdrawal": 1000})
+    assert r.status_code == 422
+
+
+def test_the_calculators_need_no_profile_or_data(client):
+    """They are pure what-ifs: an empty installation must still answer."""
+    for path, body in (("/api/calc/sip", {"monthly": 1000}),
+                       ("/api/calc/swp", {"corpus": 100000,
+                                          "monthly_withdrawal": 500})):
+        assert client.post(path, json=body).status_code == 200

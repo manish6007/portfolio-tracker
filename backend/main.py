@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from contextvars import ContextVar
 
 import analytics
+import calculators
 import config as config_mod
 import db as db_mod
 import export as export_mod
@@ -1528,6 +1529,66 @@ def fi_projection(years: int = 50, inflation_pct: float = None,
         "coast": {"years_to_fi": coast["years_to_fi"]},
         "notes": notes,
     }
+
+
+# ---------------- calculators ----------------
+# Pure what-ifs: nothing here opens a session, because none of it depends on
+# what the user owns. That is the point of keeping them off the FI page,
+# which is entirely about the real portfolio.
+def _calc(fn, **kw):
+    """Run a calculator, turning its own complaints into a 400 with the
+    sentence it wrote. The models in schemas.py catch the ranges; these are
+    the objections only the maths knows about."""
+    try:
+        return fn(**kw)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/calc/sip")
+def calc_sip(body: schemas.SipIn):
+    """What a monthly instalment becomes -- or what reaching a target costs.
+
+    Both directions in one endpoint because they are the same plan seen from
+    either end, and answering only the first is what makes most SIP
+    calculators a toy.
+    """
+    monthly, target_plan = body.monthly, None
+    if body.target is not None:
+        target_plan = _calc(
+            calculators.sip_for_target, target=body.target,
+            annual_return_pct=body.annual_return_pct, years=body.years,
+            step_up_pct=body.step_up_pct, lumpsum=body.lumpsum)
+        monthly = target_plan["monthly"]
+
+    result = _calc(calculators.sip, monthly=monthly,
+                   annual_return_pct=body.annual_return_pct, years=body.years,
+                   step_up_pct=body.step_up_pct, lumpsum=body.lumpsum,
+                   inflation_pct=body.inflation_pct)
+    result["target_plan"] = target_plan
+    result["notes"] = calculators.notes(result, "sip")
+    return result
+
+
+@app.post("/api/calc/swp")
+def calc_swp(body: schemas.SwpIn):
+    """Whether a corpus survives a monthly withdrawal, and what it would take.
+
+    The sustainable figure ships with every answer rather than behind a
+    second button: "it runs out in year 14" is only actionable next to the
+    amount that would not have.
+    """
+    result = _calc(calculators.swp, corpus=body.corpus,
+                   monthly_withdrawal=body.monthly_withdrawal,
+                   annual_return_pct=body.annual_return_pct, years=body.years,
+                   step_up_pct=body.step_up_pct,
+                   inflation_pct=body.inflation_pct)
+    result["sustainable"] = _calc(
+        calculators.swp_sustainable, corpus=body.corpus,
+        annual_return_pct=body.annual_return_pct, years=body.years,
+        step_up_pct=body.step_up_pct)
+    result["notes"] = calculators.notes(result, "swp")
+    return result
 
 
 # ---------------- family record ----------------

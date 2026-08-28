@@ -28,7 +28,7 @@ a = Analysis(
         # so PyInstaller's import graph cannot see them.
         'uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan.on',
-        'demo_data', 'analytics', 'capmix', 'config', 'db', 'export',
+        'demo_data', 'analytics', 'calculators', 'capmix', 'config', 'db', 'export',
         'family_record', 'fi', 'importers', 'matching', 'netlog', 'paths',
         'pricing', 'profiles', 'schemas', 'service',
     ],

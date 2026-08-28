@@ -305,6 +305,38 @@ class ApplyCodes(Strict):
     assignments: List[CodeAssignment] = Field(default_factory=list)
 
 
+# ---------------- calculators ----------------
+# These take no database at all: every number comes from the request, so the
+# bounds here are the only validation there is. They are wide enough to be
+# useful and narrow enough that nothing loops for a minute -- a 12000% return
+# is a typo, not a portfolio.
+class SipIn(Strict):
+    monthly: float = Field(0, ge=0, le=1e9)
+    lumpsum: float = Field(0, ge=0, le=1e12)
+    annual_return_pct: float = Field(12.0, ge=-50, le=100)
+    years: float = Field(10, gt=0, le=60)
+    step_up_pct: float = Field(0, ge=0, le=100)
+    inflation_pct: float = Field(6.0, ge=0, le=50)
+    # When set, the answer is inverted: what instalment reaches this?
+    target: Optional[float] = Field(None, gt=0, le=1e12)
+
+    @model_validator(mode="after")
+    def _something_to_grow(self):
+        if self.target is None and self.monthly <= 0 and self.lumpsum <= 0:
+            raise ValueError(
+                "Enter a monthly amount, a lumpsum, or a target to aim at.")
+        return self
+
+
+class SwpIn(Strict):
+    corpus: float = Field(gt=0, le=1e12)
+    monthly_withdrawal: float = Field(gt=0, le=1e9)
+    annual_return_pct: float = Field(8.0, ge=-50, le=100)
+    years: float = Field(25, gt=0, le=60)
+    step_up_pct: float = Field(0, ge=0, le=100)
+    inflation_pct: float = Field(6.0, ge=0, le=50)
+
+
 # ---------------- privacy, profiles, danger ----------------
 class OfflineIn(Strict):
     offline: bool

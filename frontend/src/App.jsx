@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
 import Help from './components/Help'
 import ProfileBar from './components/ProfileBar'
+import Calculators from './pages/Calculators'
 import Cashflow from './pages/Cashflow'
 import Dashboard from './pages/Dashboard'
 import ExportPage from './pages/ExportPage'
@@ -13,7 +14,7 @@ import Privacy from './pages/Privacy'
 import Settings from './pages/Settings'
 
 const TABS = ['Dashboard', 'Portfolio', 'Cashflow', 'Loans', 'Insurance', 'FI',
-  'Export', 'Privacy', 'Settings']
+  'Calculators', 'Export', 'Privacy', 'Settings']
 
 export default function App() {
   const [tab, setTab] = useState('Dashboard')
@@ -75,6 +76,7 @@ export default function App() {
             {tab === 'Loans' && <Loans {...ctx} />}
             {tab === 'Insurance' && <Insurance {...ctx} />}
             {tab === 'FI' && <FI {...ctx} />}
+            {tab === 'Calculators' && <Calculators {...ctx} />}
             {tab === 'Export' && <ExportPage {...ctx} />}
             {tab === 'Privacy' && <Privacy {...ctx} />}
             {tab === 'Settings' && <Settings {...ctx} />}

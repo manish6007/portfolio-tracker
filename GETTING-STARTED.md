@@ -193,6 +193,12 @@ each step makes the next one's numbers mean something.
 7. **Dashboard → Take snapshot.** Do this once a month. It is the only thing
    that builds your net-worth trend — the app does not invent history.
 
+There is also a **Calculators** tab that needs none of the above. It works
+purely on numbers you type — what a monthly SIP becomes, what SIP you need to
+reach a particular amount, and how long a pot lasts if you withdraw from it
+every month — and it never touches your own figures. It is a safe place to
+poke around on day one.
+
 The **ⓘ** button in the top bar opens the full guide inside the app.
 
 ### Showing it to someone without showing them your money
