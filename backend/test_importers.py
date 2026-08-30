@@ -595,3 +595,15 @@ def test_a_fund_named_with_a_long_number_is_still_a_fund():
     """The guard keys on furniture, not on digits appearing at all."""
     assert imp.is_plausible_scheme("Nippon India Nifty 50 Value 20 Index Fund")
     assert imp.is_plausible_scheme("ICICI Prudential Nifty Next 50 Index Fund")
+
+
+def test_reading_xlsx_is_available_not_optional():
+    """The packaged app must be able to open a broker workbook.
+
+    openpyxl used to be an undeclared import with a "export it as CSV
+    instead" fallback, so every .xlsx import failed on a clean install and
+    in the downloadable build -- for the format brokers export by default.
+    If this import fails, requirements.txt has regressed.
+    """
+    import openpyxl                              # noqa: F401
+    assert imp.read_table(_workbook([("S", HOLDINGS)]), "x.xlsx")[1]

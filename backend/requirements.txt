@@ -6,6 +6,12 @@ reportlab>=4.0
 python-multipart>=0.0.9
 pypdf>=4.0          # AES-256 for the sealed family record
 cryptography>=42.0  # pypdf's AES backend
+# Broker holdings arrive as .xlsx far more often than as CSV. This was
+# optional, with a "export it as CSV instead" message as the fallback --
+# which meant the packaged app could not read the commonest import format
+# at all. 3.1 is the floor: reset_dimensions() is what makes a sheet that
+# misdeclares its size readable.
+openpyxl>=3.1
 
 # Testing only (fastapi.testclient needs an HTTP client)
 httpx>=0.27

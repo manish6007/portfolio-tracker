@@ -31,6 +31,7 @@ a = Analysis(
         'demo_data', 'analytics', 'calculators', 'capmix', 'config', 'db', 'export',
         'family_record', 'fi', 'importers', 'matching', 'netlog', 'paths',
         'pricing', 'profiles', 'schemas', 'service',
+        'openpyxl',
     ],
     hookspath=[],
     runtime_hooks=[],
