@@ -5,12 +5,14 @@ cover the claims the app makes about itself, because a claim nobody checks
 is worth nothing.
 """
 import os
+from urllib.parse import urlparse
 
 import pytest
 
 import config
 import db
 import netlog
+
 import pricing
 import profiles as profiles_mod
 
@@ -299,8 +301,16 @@ def test_the_diagnosis_names_what_actually_arrived(store):
     assert "Access denied" in html
 
 
-def test_the_connection_test_does_not_download_the_whole_file(store,
-                                                              monkeypatch):
+def test_the_connection_test_does_not_download_the_whole_nav_file(store,
+                                                                  monkeypatch):
+    """The AMFI file is over a megabyte; a diagnostic must not pull it.
+
+    The chart probe deliberately does *not* ask for a range: its reply is
+    small and has to be read in full, because the question it answers is
+    "can a price be read from this", not "did bytes arrive". A probe that
+    stopped at reachable reported success while every lookup came back
+    empty.
+    """
     seen = {}
 
     class Resp:
@@ -313,11 +323,34 @@ def test_the_connection_test_does_not_download_the_whole_file(store,
             return {}
 
     def fake_get(url, timeout=None, headers=None):
-        seen.setdefault("ranges", []).append((headers or {}).get("Range"))
+        seen[urlparse(url).hostname] = (headers or {}).get("Range")
         return Resp()
     monkeypatch.setattr(pricing.requests, "get", fake_get)
     pricing.check_hosts(timeout=1)
-    assert all(r == "bytes=0-4095" for r in seen["ranges"])
+    assert seen["www.amfiindia.com"] == "bytes=0-4095"
+    assert seen["query1.finance.yahoo.com"] is None
+
+
+def test_the_connection_test_fails_a_feed_that_answers_without_a_price(
+        store, monkeypatch):
+    """Reachable is not the same as working, and it must not read as such."""
+    class Resp:
+        content = b"{}"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"chart": {"result": None,
+                              "error": {"description": "No data found"}}}
+
+    monkeypatch.setattr(pricing.requests, "get",
+                        lambda *a, **k: Resp())
+    rows = {r["host"]: r for r in pricing.check_hosts(timeout=1)}
+    yahoo = rows["query1.finance.yahoo.com"]
+    assert yahoo["ok"] is False
+    assert "no price" in yahoo["detail"]
+    assert "No data found" in yahoo["detail"]
 
 
 # ---- the AMFI layout, as it actually is ---------------------------------

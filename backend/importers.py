@@ -136,39 +136,98 @@ def read_table(data, filename=""):
         dialect = csv.excel
     reader = csv.reader(io.StringIO(text), dialect)
     rows = [r for r in reader if any((c or "").strip() for c in r)]
+    return _table_from_rows(rows)
+
+
+# How far down a sheet to look for the header. Broker exports put a client
+# id, a title and a summary block above it; thirty rows covers every one
+# seen so far without scanning a whole file.
+MAX_HEADER_SCAN = 30
+
+
+def _header_score(cells):
+    """How much a row looks like the header of a holdings table.
+
+    Width is not the signal, which is what the first version of this got
+    wrong. A CSV saved out of Excel pads *every* row to the same number of
+    fields, so "widest row" picked row one -- a client id -- and every
+    column came back unmapped. What actually distinguishes a header is that
+    its cells are words we recognise, so that is what is counted, with the
+    number of filled cells only as a tie-break.
+    """
+    text = [str(c).strip() for c in cells]
+    filled = [c for c in text if c]
+    if len(filled) < 2:
+        return (0, 0)
+    return (len(sniff_columns(text)), len(filled))
+
+
+def _pick_header(rows):
+    """Index of the most header-looking row that has data under it."""
+    best_idx, best = 0, (-1, -1)
+    for i in range(min(len(rows), MAX_HEADER_SCAN)):
+        if i + 1 >= len(rows):      # a last line is a footer, not a header
+            break
+        score = _header_score(rows[i])
+        if score > best:
+            best_idx, best = i, score
+    return best_idx, best
+
+
+def _table_from_rows(rows):
+    """(headers, records) from raw rows, finding the header row first."""
     if not rows:
         return [], []
-    # Broker exports often carry title/disclaimer lines above the real header.
-    header_idx = max(range(min(len(rows), 15)), key=lambda i: len(rows[i]))
-    headers = [h.strip() for h in rows[header_idx]]
+    idx, _ = _pick_header(rows)
+    headers = [str(h).strip() for h in rows[idx]]
     out = []
-    for r in rows[header_idx + 1:]:
-        if len(r) < 2:
+    for r in rows[idx + 1:]:
+        if len([c for c in r if str(c).strip()]) < 2:
             continue
         out.append({headers[i]: (r[i] if i < len(r) else "")
                     for i in range(len(headers))})
     return headers, out
 
 
+def _sheet_rows(ws):
+    ws.reset_dimensions()   # see _read_xlsx
+    rows = [[("" if c is None else c) for c in row]
+            for row in ws.iter_rows(values_only=True)]
+    return [r for r in rows if any(str(c).strip() for c in r)]
+
+
 def _read_xlsx(data):
+    """The best table in the workbook, whichever sheet it is on.
+
+    Two things this has to survive. Some writers declare
+    <dimension ref="A1"/> whatever the sheet actually holds; openpyxl's
+    read-only mode believes that and yields one empty cell, so a perfectly
+    good file imported as nothing at all. reset_dimensions() makes it read
+    the rows instead.
+
+    And a broker workbook usually has several sheets -- Equity, Mutual
+    Funds, Combined -- so taking the first one is a guess. Each is scored
+    the same way a header row is, and the sheet with the most recognisable
+    table wins.
+    """
     try:
         from openpyxl import load_workbook
     except ImportError:
         raise ValueError("Reading .xlsx needs the openpyxl package; export "
                          "the sheet as CSV instead.")
     wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    ws = wb[wb.sheetnames[0]]
-    rows = [[("" if c is None else c) for c in row]
-            for row in ws.iter_rows(values_only=True)]
-    rows = [r for r in rows if any(str(c).strip() for c in r)]
-    if not rows:
-        return [], []
-    header_idx = max(range(min(len(rows), 15)), key=lambda i: len(
-        [c for c in rows[i] if str(c).strip()]))
-    headers = [str(h).strip() for h in rows[header_idx]]
-    out = [{headers[i]: (r[i] if i < len(r) else "")
-            for i in range(len(headers))} for r in rows[header_idx + 1:]]
-    return headers, out
+    best, best_score = ([], []), (-1, -1)
+    for name in wb.sheetnames:
+        rows = _sheet_rows(wb[name])
+        if not rows:
+            continue
+        idx, score = _pick_header(rows)
+        # Recognisable columns first, then how many rows sit under them: a
+        # summary tab can name a column or two but carries no holdings.
+        rank = (score[0], len(rows) - idx - 1)
+        if rank > best_score:
+            best, best_score = _table_from_rows(rows), rank
+    return best
 
 
 def derive_quantities(units=None, avg_cost=None, last_price=None,
@@ -288,6 +347,31 @@ def _clean_scheme(text):
     text = re.sub(r"\bRegistrar\b\s*:?\s*(?:CAMS|KFINTECH|KARVY)?", "", text,
                   flags=re.I)
     return re.sub(r"\s+", " ", text).strip(" -–:,")
+
+
+# Statement furniture that has turned up where a scheme name should be: a
+# generation timestamp, a software version banner, a page marker. A CAS
+# produced "260826143717 Version:V3.5 Live-1018" as a fund name, which is
+# not a fund and never will be.
+FURNITURE = re.compile(
+    r"\d{10,}|\bversion\s*:|\bpage\s*\d|\bstatement\s+(?:period|date)\b"
+    r"|\bgenerated\s+on\b|^\W*$", re.I)
+
+
+def is_plausible_scheme(text):
+    """Whether a string could be a fund's name.
+
+    Cheap and deliberately loose: this only has to catch the page furniture
+    a parser sometimes grabs, not to validate against AMFI. A name it
+    rejects becomes "Scheme (name not read)" with a note, which is honest
+    and fixable -- a name it wrongly accepts is a holding labelled with a
+    build number, which nobody spots until they read their own portfolio.
+    """
+    text = (text or "").strip()
+    if len(text) < 6 or FURNITURE.search(text):
+        return False
+    letters = sum(c.isalpha() for c in text)
+    return letters >= 6 and letters >= len(text) / 3
 
 
 def extract_cas_text(pdf_bytes, password=""):
@@ -481,7 +565,7 @@ def parse_cas(text, owner="Me"):
         if not scheme:
             scheme_m = SCHEME_RE.search(block)
             scheme = _clean_scheme(scheme_m.group(2)) if scheme_m else ""
-        if not scheme:
+        if not is_plausible_scheme(scheme):
             scheme = "Scheme (name not read)"
             notes.append("A scheme name could not be read for folio %s — set "
                          "it by hand after importing." % (folio or isin))
@@ -570,7 +654,7 @@ def parse_cas_summary(text, owner="Me"):
         scheme = _clean_scheme(after[:after.find(nums[0])])
         date_m = NAV_DATE_TOKEN.search(after)
         registrar_m = REGISTRAR_TOKEN.search(after)
-        if not scheme:
+        if not is_plausible_scheme(scheme):
             scheme = "Scheme (name not read)"
             notes.append("A scheme name could not be read for ISIN %s — set "
                          "it by hand after importing." % isin)

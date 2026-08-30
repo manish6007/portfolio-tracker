@@ -775,12 +775,25 @@ def refresh_prices():
     # rather than three clicks away on the Privacy page.
     reason = next((e["detail"] for e in netlog.entries()
                    if e["outcome"] in ("failed", "refused", "unreadable")), "")
+    # A price feed that answers with nothing is not a broken connection and
+    # not a wrong ticker, and telling those apart is the difference between
+    # "check your symbols" and "wait for the feed". Only said when every
+    # lookup came back empty, which is what a feed-side failure looks like.
+    stock_reason = ""
+    if failed and not stock_updated:
+        empties = [e for e in netlog.entries() if e["outcome"] == "empty"]
+        if len(empties) >= len(failed):
+            stock_reason = (
+                "Every lookup reached Yahoo and came back with no price, so "
+                "this is the feed rather than your tickers. Try again later; "
+                "Privacy \u2192 Test connection confirms it.")
     return {"amfi_reachable": amfi_status == pricing.AMFI_OK,
             "amfi_status": amfi_status, "offline": config_mod.offline(),
             "mf_updated": mf_updated, "mf_failed": mf_failed,
             "mf_placeholders": mf_placeholders,
             "stocks_updated": stock_updated, "stock_failed": failed,
-            "stock_no_ticker": no_ticker, "reason": reason}
+            "stock_no_ticker": no_ticker, "reason": reason,
+            "stock_reason": stock_reason}
 
 
 # A recorded price is only worth comparing against today's NAV when it is

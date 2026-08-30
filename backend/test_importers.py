@@ -2,6 +2,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import importers as imp  # noqa: E402
@@ -446,3 +448,150 @@ def test_a_row_with_no_way_to_reach_units_is_reported_not_invented():
                                  "Avg. cost", "LTP"])
     rows, skipped = imp.build_rows(recs, mapping, asset_class="mutual_fund")
     assert rows == [] and "no quantity" in skipped[0]
+
+
+# ---------------- broker workbooks that are not a plain table ----------------
+def _workbook(sheets, declare_empty_dimension=False):
+    """An .xlsx as brokers actually write them.
+
+    `declare_empty_dimension` reproduces a real export that says
+    <dimension ref="A1"/> however much the sheet holds.
+    """
+    import io as _io
+    import re as _re
+    import zipfile
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    for title, rows in sheets:
+        ws = wb.create_sheet(title)
+        for row in rows:
+            ws.append(row)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    if not declare_empty_dimension:
+        return buf.getvalue()
+
+    src = zipfile.ZipFile(_io.BytesIO(buf.getvalue()))
+    out = _io.BytesIO()
+    with zipfile.ZipFile(out, "w") as dst:
+        for item in src.infolist():
+            body = src.read(item.filename)
+            if item.filename.startswith("xl/worksheets/sheet"):
+                body = _re.sub(rb'<dimension ref="[^"]*"/>',
+                               b'<dimension ref="A1"/>', body)
+            dst.writestr(item, body)
+    return out.getvalue()
+
+
+# A leading blank column, a client id, a title and a summary block above the
+# real header -- the shape every broker holdings export seems to share.
+PREAMBLE = [
+    [None, "Client ID", "OXB189"],
+    [None, "Equity Holdings Statement as on 2026-08-30"],
+    [None, "Summary"],
+    [None, "Invested Value", 531762.45],
+    [None, "Present Value", 596727.05],
+]
+HOLDINGS = [
+    [None, "Symbol", "ISIN", "Sector", "Quantity Available",
+     "Average Price", "Previous Closing Price"],
+    [None, "ANANDRATHI", "INE463V01026", "FINANCIAL SERVICES", 10,
+     2187.845, 2213.55],
+    [None, "SHILPAMED", "INE790G01031", "HEALTHCARE", 100, 572.0075, 904.25],
+]
+
+
+def test_a_workbook_that_lies_about_its_dimensions_still_reads():
+    """openpyxl's read-only mode believes <dimension ref="A1"/>.
+
+    A real export declared that and imported as nothing at all -- no error,
+    no rows, just an empty preview. reset_dimensions() is what makes the
+    reader look at the rows instead of the claim.
+    """
+    data = _workbook([("Equity", PREAMBLE + HOLDINGS)],
+                     declare_empty_dimension=True)
+    headers, rows = imp.read_table(data, "holdings.xlsx")
+    assert len(rows) == 2
+    assert rows[0]["Symbol"] == "ANANDRATHI"
+
+
+def test_the_header_is_found_under_a_summary_block():
+    data = _workbook([("Equity", PREAMBLE + HOLDINGS)])
+    headers, rows = imp.read_table(data, "holdings.xlsx")
+    assert "Symbol" in headers and "Average Price" in headers
+    assert len(rows) == 2
+
+
+def test_the_sheet_with_the_holdings_wins_over_the_first_one():
+    """Broker workbooks lead with a cover or an empty tab as often as not."""
+    data = _workbook([
+        ("Notes", [["This statement is computer generated."]]),
+        ("Mutual Funds", PREAMBLE),          # summary only, no holdings
+        ("Equity", PREAMBLE + HOLDINGS),
+    ])
+    headers, rows = imp.read_table(data, "holdings.xlsx")
+    assert len(rows) == 2 and rows[0]["Symbol"] == "ANANDRATHI"
+
+
+def test_a_csv_padded_to_equal_width_still_finds_its_header():
+    """Excel pads every row to the widest, so "widest row" is no signal.
+
+    This is the bug the first version had: saved out of Excel, row one --
+    a client id -- was as wide as the header, tied, and won.
+    """
+    data = (b",,,,,,\n"
+            b",Client ID,OXB189,,,,\n"
+            b",Equity Holdings Statement as on 2026-08-30,,,,,\n"
+            b",Invested Value,531762.45,,,,\n"
+            b",Symbol,ISIN,Sector,Quantity Available,Average Price,"
+            b"Previous Closing Price\n"
+            b",ANANDRATHI,INE463V01026,FINANCIAL SERVICES,10,2187.845,2213.55\n"
+            b",SHILPAMED,INE790G01031,HEALTHCARE,100,572.0075,904.25\n")
+    headers, rows = imp.read_table(data, "holdings.csv")
+    assert "Symbol" in headers
+    assert len(rows) == 2 and rows[0]["Symbol"] == "ANANDRATHI"
+
+
+def test_a_broker_workbook_reconciles_to_its_own_stated_total():
+    """The check that matters: our sum equals the sheet's Present Value."""
+    data = _workbook([("Equity", PREAMBLE + HOLDINGS)],
+                     declare_empty_dimension=True)
+    headers, records = imp.read_table(data, "holdings.xlsx")
+    rows, skipped = imp.build_rows(records, imp.sniff_columns(headers),
+                                   asset_class="stock")
+    assert not skipped
+    total = sum(r["current_value"] for r in rows)
+    assert total == pytest.approx(10 * 2213.55 + 100 * 904.25)
+
+
+def test_the_summary_block_is_not_mistaken_for_the_header():
+    """"Invested Value" is a real alias, so that row scores -- just less."""
+    idx, score = imp._pick_header(PREAMBLE + HOLDINGS)
+    assert idx == len(PREAMBLE)
+
+
+# ---------------- names a parser should refuse ----------------
+def test_page_furniture_is_not_accepted_as_a_fund_name():
+    """A real CAS produced this as a scheme name."""
+    assert not imp.is_plausible_scheme("260826143717 Version:V3.5 Live-1018")
+    assert not imp.is_plausible_scheme("Page 3 of 11")
+    assert not imp.is_plausible_scheme("Generated on 26-Aug-2026")
+    assert not imp.is_plausible_scheme("")
+    assert not imp.is_plausible_scheme("128TSDGG")      # a code, not a name
+
+
+def test_real_scheme_names_are_still_accepted():
+    for name in ("SBI Small Cap Fund Direct Growth",
+                 "Parag Parikh Flexi Cap Fund - Direct Plan Growth",
+                 "Motilal Oswal ELSS Tax Saver Fund - Direct Plan Growth",
+                 "HDFC Balanced Advantage Fund - Growth Option",
+                 "Axis ELSS Tax Saver Fund - Regular Plan - IDCW"):
+        assert imp.is_plausible_scheme(name), name
+
+
+def test_a_fund_named_with_a_long_number_is_still_a_fund():
+    """The guard keys on furniture, not on digits appearing at all."""
+    assert imp.is_plausible_scheme("Nippon India Nifty 50 Value 20 Index Fund")
+    assert imp.is_plausible_scheme("ICICI Prudential Nifty Next 50 Index Fund")

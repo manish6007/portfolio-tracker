@@ -33,6 +33,7 @@ export default function Portfolio({ summary, meta, owners, reload }) {
   const [editVal, setEditVal] = useState('')
   const [editInvested, setEditInvested] = useState('')
   const [editMaturity, setEditMaturity] = useState('')
+  const [editName, setEditName] = useState('')
   const [splitId, setSplitId] = useState(null)
   const [splitVals, setSplitVals] = useState({})
   const fileRef = useRef()
@@ -116,8 +117,10 @@ export default function Portfolio({ summary, meta, owners, reload }) {
             + ' Give them their real unit count above.')
         }
         if (r.stock_failed?.length) {
-          bits.push('no price for: ' + r.stock_failed.join(', ')
-            + '. Check the ticker matches the NSE symbol.')
+          // When the feed itself returned nothing, "check your tickers" is
+          // the wrong advice and wastes an afternoon.
+          bits.push('no price for: ' + r.stock_failed.join(', ') + '. '
+            + (r.stock_reason || 'Check the ticker matches the NSE symbol.'))
         }
       }
       if (r.stock_no_ticker?.length) {
@@ -147,6 +150,7 @@ export default function Portfolio({ summary, meta, owners, reload }) {
 
   const startEdit = (h) => {
     setEditId(h.id)
+    setEditName(h.name || '')
     setEditMaturity(h.meta?.maturity_date || '')
     setEditInvested(String(Math.round(h.invested || 0)))
     setEditVal(String(
@@ -165,6 +169,11 @@ export default function Portfolio({ summary, meta, owners, reload }) {
       : h.asset_class === 'fd' ? { avg_cost: v }
         : { invested: +editInvested || 0, current_value: v }
     if (h.asset_class === 'fd') payload.meta = { maturity_date: editMaturity }
+    // An importer reads a name off a statement, and a statement has footers.
+    // A CAS once produced "260826143717 Version:V3.5" as a scheme name --
+    // recoverable only if the name is something you can correct here.
+    const named = editName.trim()
+    if (named && named !== h.name) payload.name = named
     await api.put('/api/holdings/' + h.id, payload)
     setEditId(null)
     reload()
@@ -365,7 +374,15 @@ export default function Portfolio({ summary, meta, owners, reload }) {
                   <tr key={h.id}>
                     <td>{h.owner}</td>
                     <td>{meta.asset_class_labels[h.asset_class]}</td>
-                    <td>{h.name}</td>
+                    <td>
+                      {editId === h.id ? (
+                        <input style={{ width: '100%', minWidth: 200 }}
+                          title="What this holding is called"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && saveEdit(h)} />
+                      ) : h.name}
+                    </td>
                     <td>
                       <input defaultValue={h.meta?.nominee || ''}
                         placeholder="not set"
@@ -466,7 +483,7 @@ export default function Portfolio({ summary, meta, owners, reload }) {
                     <td className="small muted">{h.price_date || h.value_date || ''}</td>
                     <td>
                       <button className="icon"
-                        title="Update what it cost and what it is worth"
+                        title="Edit the name, what it cost and what it is worth"
                         onClick={() => startEdit(h)}>✏️</button>
                       <button className="icon" title="Delete" onClick={() => del(h)}>🗑</button>
                     </td>

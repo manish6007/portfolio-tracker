@@ -105,18 +105,41 @@ def check_hosts(timeout=10):
     connection" is useless when the connection is fine. One row per host,
     with the real reason.
     """
-    probes = [(AMFI_NAV_URL, "Mutual-fund NAVs (AMFI)"),
-              (CHART_URL.format(symbol="RELIANCE.NS"), "Stock prices (Yahoo)")]
+    # The NAV file is over a megabyte, so the first few kilobytes prove
+    # reachability without pulling it twice. The chart response is small and
+    # has to be read in full, because "bytes arrived" is not the question --
+    # a probe that stops at reachable reported success while every price
+    # lookup was coming back empty, which is the failure people actually hit.
+    probes = [(AMFI_NAV_URL, "Mutual-fund NAVs (AMFI)", 4096, False),
+              (CHART_URL.format(symbol="RELIANCE.NS"),
+               "Stock prices (Yahoo)", 0, True)]
     out = []
-    for url, label in probes:
+    for url, label, head, is_chart in probes:
         host = urlparse(url).hostname
         row = {"host": host, "label": label}
         try:
-            # The NAV file is over a megabyte. Asking for the first few
-            # kilobytes proves reachability without pulling it twice, and
-            # without making a diagnostic look like heavy use to AMFI.
-            resp = _get(url, timeout, head_bytes=4096)
-            row.update(ok=True, detail="%d bytes received" % len(resp.content))
+            resp = _get(url, timeout, head_bytes=head)
+            if not is_chart:
+                row.update(ok=True,
+                           detail="%d bytes received" % len(resp.content))
+            else:
+                try:
+                    payload = resp.json()
+                except ValueError:
+                    payload = {}
+                price, when = parse_chart(payload)
+                if price:
+                    row.update(ok=True, detail="RELIANCE.NS priced at %s (%s)"
+                               % (round(price, 2), when))
+                else:
+                    # Reachable, and still no use. Naming that is the whole
+                    # point: it sends people to the right problem.
+                    row.update(ok=False, detail=(
+                        "the host answered but returned no price%s -- the "
+                        "feed changed or is refusing us, so no stock price "
+                        "can be updated until it recovers"
+                        % (": " + chart_error(payload)
+                           if chart_error(payload) else "")))
         except Offline as exc:
             row.update(ok=False, detail=str(exc))
         except requests.RequestException as exc:
@@ -298,6 +321,15 @@ def parse_chart(payload):
     return None, None
 
 
+def chart_error(payload):
+    """Yahoo's own words for why a chart request produced nothing."""
+    try:
+        err = (payload or {}).get("chart", {}).get("error") or {}
+        return str(err.get("description") or err.get("code") or "")[:120]
+    except AttributeError:
+        return ""
+
+
 def fetch_stock_price(symbol, timeout=15):
     """Latest close for an NSE/BSE ticker, straight from Yahoo's chart API.
 
@@ -317,9 +349,24 @@ def fetch_stock_price(symbol, timeout=15):
     except (requests.RequestException, Offline):
         return None, None
     try:
-        return parse_chart(resp.json())
+        payload = resp.json()
     except ValueError:
+        netlog.record(urlparse(CHART_URL).hostname,
+                      netlog.purpose_for(urlparse(CHART_URL).hostname),
+                      "unreadable", "%s: the reply was not JSON" % ticker)
         return None, None
+    price, when = parse_chart(payload)
+    if price is None:
+        # A 200 with no usable price is not the same as no answer, and the
+        # difference decides what the user should do about it. _get logged
+        # the request as ok, so this says what the ok was worth.
+        netlog.record(urlparse(CHART_URL).hostname,
+                      netlog.purpose_for(urlparse(CHART_URL).hostname),
+                      "empty", "%s: no price in the reply%s" % (
+                          ticker,
+                          " (" + chart_error(payload) + ")"
+                          if chart_error(payload) else ""))
+    return price, when
 
 
 def fetch_stock_prices(symbols, timeout=15, workers=5):

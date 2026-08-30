@@ -1171,3 +1171,54 @@ def test_an_invented_rate_convention_is_rejected(client):
     r = client.post("/api/calc/sip", json={"monthly": 10000,
                                            "rate_mode": "vibes"})
     assert r.status_code == 422
+
+
+def test_a_price_feed_that_answers_with_nothing_says_so(client, monkeypatch):
+    """"Check your tickers" is the wrong advice when the feed is empty.
+
+    A 200 carrying no price is neither a broken connection nor a wrong
+    symbol, and sending someone to re-check forty tickers they typed
+    correctly is the most expensive way to be unhelpful.
+    """
+    import netlog
+    import pricing
+    assert client.post("/api/holdings", json={
+        "asset_class": "stock", "name": "Reliance",
+        "identifier": "RELIANCE", "units": 10,
+        "avg_cost": 100}).status_code == 200
+
+    def empty_chart(url, timeout, head_bytes=0):
+        class R:
+            content = b"{}"
+
+            def json(self):
+                return {"chart": {"result": None,
+                                  "error": {"description": "No data found"}}}
+        netlog.record("query1.finance.yahoo.com", "Stock prices", "ok", "2 b")
+        return R()
+
+    monkeypatch.setattr(pricing, "_get", empty_chart)
+    monkeypatch.setattr(pricing, "fetch_amfi",
+                        lambda *a, **k: ({}, {}, pricing.AMFI_OK))
+    body = client.post("/api/prices/refresh").json()
+    assert body["stocks_updated"] == 0
+    assert body["stock_failed"]
+    assert "feed rather than your tickers" in body["stock_reason"]
+
+
+def test_a_wrong_ticker_does_not_blame_the_feed(client, monkeypatch):
+    """The same message must not appear when some lookups did work."""
+    import pricing
+    for name, ident in (("Reliance", "RELIANCE"), ("Typo", "NOTATICKER")):
+        assert client.post("/api/holdings", json={
+            "asset_class": "stock", "name": name, "identifier": ident,
+            "units": 10, "avg_cost": 100}).status_code == 200
+    monkeypatch.setattr(pricing, "fetch_amfi",
+                        lambda *a, **k: ({}, {}, pricing.AMFI_OK))
+    monkeypatch.setattr(
+        pricing, "fetch_stock_prices",
+        lambda syms, **k: {"RELIANCE": (1400.0, date(2026, 8, 28)),
+                           "NOTATICKER": (None, None)})
+    body = client.post("/api/prices/refresh").json()
+    assert body["stocks_updated"] == 1
+    assert body["stock_failed"] and not body["stock_reason"]
