@@ -19,6 +19,8 @@ from datetime import datetime
 # host the user did not agree to.
 ALLOWED_HOSTS = {
     "www.amfiindia.com": "Mutual-fund NAVs (AMFI, the industry body)",
+    "portal.amfiindia.com": ("Large/mid/small classification of shares "
+                             "(AMFI's half-yearly list)"),
     "query1.finance.yahoo.com": "Stock prices (Yahoo Finance)",
     "query2.finance.yahoo.com": "Stock prices (Yahoo Finance)",
     "fc.yahoo.com": "Stock prices (Yahoo Finance)",

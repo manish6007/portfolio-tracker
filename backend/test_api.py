@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import config
 import db
 import main
+import stockcaps
 
 
 @pytest.fixture
@@ -23,6 +24,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv(config.ENV_DATA_DIR, raising=False)
     monkeypatch.setattr(db, "_engines", {})
     monkeypatch.setattr(db, "_factories", {})
+    # A price refresh also refreshes the AMFI size list; no test should
+    # find that out by opening a real connection.
+    monkeypatch.setattr(stockcaps, "fetch", lambda timeout=60: None)
+    stockcaps.forget()
     # base_url matters: the host check rejects anything that is not
     # loopback, and TestClient defaults to http://testserver.
     with TestClient(main.app, base_url="http://localhost:8000") as c:
@@ -357,6 +362,29 @@ def test_a_readable_nav_file_and_an_unreadable_one_report_differently(client,
     body = client.post("/api/prices/refresh").json()
     assert body["amfi_status"] == "unreadable"
     assert body["amfi_reachable"] is False      # still no NAVs, different why
+
+
+def test_a_share_classifies_itself_after_a_refresh(client, monkeypatch):
+    """The size list rides along with the price refresh, and the Portfolio
+    page then says which list did the classifying."""
+    import pricing
+
+    monkeypatch.setattr(pricing, "fetch_amfi",
+                        lambda *a, **k: ({}, {}, pricing.AMFI_UNREACHABLE))
+    monkeypatch.setattr(pricing, "fetch_stock_prices", lambda syms, **k: {})
+    monkeypatch.setattr(stockcaps, "fetch", lambda timeout=60: {
+        "as_of": stockcaps.period_ends()[0].isoformat(), "fetched": "test",
+        "by_symbol": {"RELIANCE": "large"}, "by_isin": {}})
+    client.post("/api/holdings",
+                json={"asset_class": "stock", "name": "Reliance", "units": 1,
+                      "avg_cost": 10, "identifier": "RELIANCE"})
+    body = client.post("/api/prices/refresh").json()
+    assert body["cap_list"]["status"] == "updated"
+
+    held = client.get("/api/summary").json()["holdings"]
+    reliance = next(h for h in held if h["name"] == "Reliance")
+    assert reliance["cap_split"] == {"large": 1.0}
+    assert "AMFI" in reliance["cap_source"]
 
 
 # ---- giving funds the code that prices them -----------------------------

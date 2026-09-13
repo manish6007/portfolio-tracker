@@ -11,15 +11,17 @@ Two sources feed this:
   Cap fund at least 65% outside the top 250 -- and AMFI's scheme names carry
   the category. So a fund's mix is read from its own name.
 * **Direct shares** do not. Which bucket a company sits in comes from AMFI's
-  half-yearly classification list, which this app has no honest way to fetch,
-  so shares are tagged by the user and anything untagged is reported as
-  unclassified rather than guessed into a bucket.
+  half-yearly classification list, fetched and cached by stockcaps during a
+  price refresh. A user's own tag still wins, and a share on neither the
+  list nor a tag is reported as unclassified rather than guessed.
 
 Every split below is an assumption, and stated as one. The mandate fixes the
 floor; the remainder is placed the way the category is usually run. They are
 here to be argued with, which is why the reason travels with the number.
 """
 import re
+
+import stockcaps
 
 BUCKETS = ("large", "mid", "small", "international")
 LABELS = {"large": "Large cap", "mid": "Mid cap", "small": "Small cap",
@@ -115,6 +117,11 @@ def cap_split(h):
     single = (meta.get("cap") or "").strip().lower()
     if single in BUCKETS:
         return {single: 1.0}, "set by you"
+    if h.get("asset_class") == "stock":
+        bucket, source = stockcaps.lookup(h.get("identifier"),
+                                          meta.get("isin"), h.get("name"))
+        if bucket:
+            return {bucket: 1.0}, source
     if h.get("asset_class") == "mutual_fund":
         category = classify_scheme(h.get("name"))
         if category:

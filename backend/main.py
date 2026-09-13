@@ -5,6 +5,7 @@ The built React app (frontend/dist) is served at /, the API under /api.
 """
 import csv
 import io
+import re
 import json
 import os
 from datetime import date, datetime
@@ -31,11 +32,15 @@ import netlog
 import paths
 import pricing
 import profiles as profiles_mod
+import history
+import ledger
 import schemas
 import service
-from db import (ASSET_CLASS_LABELS, ASSET_CLASSES, ExpenseEntry, Goal,
-                Holding,
-                IncomeEntry, Loan, Owner, Policy, RecurringOutflow, Snapshot,
+import stockcaps
+from db import (ASSET_CLASS_LABELS, ASSET_CLASSES, CapitalFlow, ExpenseEntry,
+                Goal, Holding, Lot,
+                IncomeEntry, Loan, Owner, Policy, RealisedTrade,
+                RecurringOutflow, Snapshot,
                 Transaction, get_session, get_setting, get_targets,
                 set_setting)
 
@@ -490,6 +495,135 @@ async def import_holdings(file: UploadFile):
 
 
 # ---------------- guided import ----------------
+def _tradebook_preview(headers, records, filename):
+    """What a tradebook would do, before it does it."""
+    trades, notes = imp_mod.parse_tradebook(headers, records)
+    groups = imp_mod.group_trades(trades)
+    # A book may name a company and give its ISIN but never its ticker, while
+    # the portfolio is keyed by ticker. AMFI's list carries both -- but a
+    # cache saved before that index existed carries neither, and every
+    # company then failed to resolve and imported as a duplicate. So the
+    # list is brought up to date first, once, when it cannot answer.
+    if any(not g["symbol"] for g in groups) and not stockcaps.has_tickers():
+        try:
+            stockcaps.refresh()
+        except Exception:                       # offline, or AMFI is down
+            pass
+    unresolved = 0
+    for g in groups:
+        if g["symbol"]:
+            continue
+        for isin in g.get("isins") or []:
+            found = stockcaps.ticker_for(isin)
+            if found:
+                g["symbol"] = found
+                break
+        else:
+            unresolved += 1
+    if unresolved:
+        notes = list(notes) + [
+            "%d compan%s could not be matched to a ticker, so they will not "
+            "price themselves until you set one. Refresh prices once to fetch "
+            "the exchange list, then import again."
+            % (unresolved, "y" if unresolved == 1 else "ies")]
+    return {"kind": "tradebook", "book": _book_name(filename),
+            "groups": groups, "trades": len(trades), "notes": notes}
+
+
+def _book_name(filename):
+    """A stable name for one broker's book, so a re-import replaces itself.
+
+    Taken from the file rather than invented, because the alternative --
+    replacing everything ever imported -- would delete the other broker's
+    parcels for any share held at both.
+    """
+    stem = os.path.splitext(os.path.basename(filename or ""))[0]
+    stem = re.sub(r"[^A-Za-z0-9]+", "-", stem).strip("-").lower()
+    return ("book:" + stem)[:60] if stem else "book:unnamed"
+
+
+@app.post("/api/import/tradebook")
+def import_tradebook(body: schemas.TradebookCommit):
+    """Replay a broker's trades into the ledger.
+
+    Each share gets real purchase parcels with real dates -- which is what
+    the shares have never had -- and every sale is booked against them
+    oldest-first, so realised gains and holding periods come out of the same
+    machinery the journal uses.
+
+    Re-importing the same book replaces what it wrote last time and leaves
+    every other source alone: a share held at two brokers keeps both sets of
+    parcels, and anything entered by hand is never touched.
+    """
+    s = db()
+    owners = {o.name: o.id for o in s.query(Owner).all()}
+    oname = body.owner or (s.query(Owner).first().name)
+    if oname not in owners:
+        o = Owner(name=oname)
+        s.add(o)
+        s.commit()
+        owners[oname] = o.id
+    added = updated = parcels = closed = skipped = merged = 0
+    partial = []
+    for g in body.groups:
+        group = g.model_dump()
+        symbol = (group.get("symbol") or "").strip().upper()
+        # A company name is not a ticker. Writing one into `identifier`
+        # produced a holding nothing could price, showing its entire cost as
+        # a loss; an empty identifier is merely unpriced until one is set.
+        if " " in symbol or not re.fullmatch(r"[A-Z0-9&.\-]{1,20}", symbol):
+            symbol = ""
+        name = (group.get("name") or symbol).strip()
+        meta = {"source": db_mod.SOURCE_BROKER}
+        if group.get("isin"):
+            meta["isin"] = group["isin"]
+        h = service.find_imported_holding(s, owners[oname], "stock", meta,
+                                          symbol)
+        # What the app currently believes is held. A book is history, so the
+        # position must not grow just because its purchases are now on
+        # record -- only the placeholder parcel gives way to them.
+        held_before = ledger.units_held(h) if h is not None else None
+        # The sleeve is the user's judgement about the position, not a fact
+        # about the trades. A book knows nothing about it, so it is carried
+        # across rather than reset to nothing.
+        sleeve = _current_sleeve(h) if h is not None else ""
+        if h is None:
+            h = Holding(owner_id=owners[oname], asset_class="stock",
+                        name=name, identifier=symbol,
+                        value_date=date.today(), meta=json.dumps(meta))
+            s.add(h)
+            s.flush()
+            added += 1
+        else:
+            h.meta = json.dumps(service.merge_import_meta(h.meta_dict(), meta))
+            if symbol and not h.identifier:
+                h.identifier = symbol
+            updated += 1
+        service.clear_book(s, h, body.book)
+        made, shut, missed, same = service.replay_trades(
+            s, h, group.get("trades") or [], body.book, sleeve=sleeve)
+        parcels += made
+        closed += shut
+        skipped += missed
+        merged += same
+        if held_before is not None:
+            over = service.reconcile_opening(s, h, held_before)
+            if over:
+                partial.append(
+                    "%s: the book accounts for %g more units than are held, "
+                    "so the extra was kept. Check whether shares were "
+                    "transferred out." % (h.name, over))
+        if missed:
+            partial.append("%s: %d sale%s could not be matched to a purchase, "
+                           "so the book starts after you first bought it."
+                           % (h.name, missed, "" if missed == 1 else "s"))
+    s.commit()
+    s.close()
+    return {"added": added, "updated": updated, "parcels": parcels,
+            "closed": closed, "skipped": skipped, "merged": merged,
+            "warnings": partial}
+
+
 @app.get("/api/import/fields")
 def import_fields():
     return {"mappable": imp_mod.MAPPABLE,
@@ -563,6 +697,11 @@ async def import_preview(file: UploadFile = File(...),
         raise HTTPException(400, str(exc))
     if not headers:
         raise HTTPException(400, "No readable rows in that file.")
+    # A tradebook is not a list of holdings, and importing it as one makes a
+    # separate holding out of every trade. Detected before the column
+    # sniffer gets a chance to read it as positions.
+    if not mapping and imp_mod.looks_like_tradebook(headers, records):
+        return _tradebook_preview(headers, records, name)
     if mapping:
         try:
             chosen = {k: v for k, v in json.loads(mapping).items() if v}
@@ -591,8 +730,11 @@ def _add_import_txns(s, holding, rows):
     It is what turns XIRR from an estimate into the real money-weighted
     return, so it is kept rather than thrown away after valuing the holding.
     A row that does not carry a usable date is dropped, not guessed at.
+
+    Marked as coming from a statement, so the next import of the same
+    statement replaces these rather than adding a second copy of each.
     """
-    kept = 0
+    kept, earliest = 0, None
     for t in rows:
         try:
             when = date.fromisoformat((t.get("date") or "")[:10])
@@ -602,18 +744,67 @@ def _add_import_txns(s, holding, rows):
         if amount <= 0 or t.get("type") not in ("buy", "sell", "dividend"):
             continue
         s.add(Transaction(holding_id=holding.id, date=when, type=t["type"],
-                          amount=amount, units=float(t.get("units") or 0)))
+                          amount=amount, units=float(t.get("units") or 0),
+                          source=db_mod.SOURCE_CAS))
+        earliest = when if earliest is None or when < earliest else earliest
         kept += 1
-    return kept
+    return kept, earliest
+
+
+def _import_meta(row, cls):
+    """(meta, identifier) for one statement row.
+
+    The AMFI code is what prices a fund, so it wins the identifier slot; the
+    folio stays in meta where the family record finds it -- and where the
+    matcher can tell two accounts holding the same scheme apart.
+
+    A CAS identifies a fund by folio and never by AMFI code, so for a fund
+    the folio always moves to meta even when no code came with it. Leaving it
+    in `identifier` overwrote the scheme code of every fund a re-import
+    touched, which is the one field NAV refresh needs. An empty identifier is
+    recoverable -- the ISIN in meta resolves the code on the next refresh --
+    and a folio sitting in it is not.
+    """
+    meta = {}
+    if row.get("purchase_date"):
+        meta["purchase_date"] = row["purchase_date"]
+    if cls == "mutual_fund":
+        meta["category"] = row.get("category") or "equity"
+    for key in ("isin", "registrar", "nominee"):
+        if row.get(key):
+            meta[key] = row[key]
+    ident = (row.get("identifier") or "").strip()
+    code = (row.get("scheme_code") or "").strip()
+    if cls == "mutual_fund" and ident:
+        meta["folio"] = ident
+        ident = code
+    elif code:
+        if ident:
+            meta["folio"] = ident
+        ident = code
+    return meta, ident
 
 
 @app.post("/api/import/commit")
 def import_commit(body: schemas.ImportCommit):
-    """Create holdings from rows the user has just reviewed."""
+    """Write the reviewed rows into the portfolio, replacing what a previous
+    import of the same holdings produced.
+
+    A statement is authoritative for the folios it covers and says nothing
+    about the rest, so a row that matches an existing holding overwrites its
+    numbers instead of adding a second copy of it -- re-importing last
+    quarter's file used to double every position. What a person authored is
+    left alone: the company-size tag, hand-built splits, notes, and any
+    transaction or purchase they entered themselves.
+
+    Holdings *absent* from the statement are never touched. Absence means
+    "this file did not cover it" at least as often as it means "sold", and a
+    CAMS statement legitimately carries no KFintech folios.
+    """
     s = db()
     owners = {o.name: o.id for o in s.query(Owner).all()}
     default_owner = body.owner or s.query(Owner).first().name
-    added, txns, errors = 0, 0, []
+    added, updated, txns, errors, conflicts = 0, 0, 0, [], []
     for i, r in enumerate(row.model_dump() for row in body.rows):
         try:
             oname = (r.get("owner") or default_owner).strip()
@@ -625,40 +816,64 @@ def import_commit(body: schemas.ImportCommit):
             cls = r.get("asset_class") or "stock"
             if cls not in ASSET_CLASSES:
                 raise ValueError("bad asset_class %r" % cls)
-            meta = {}
-            if r.get("purchase_date"):
-                meta["purchase_date"] = r["purchase_date"]
-            if cls == "mutual_fund":
-                meta["category"] = r.get("category") or "equity"
-            for k in ("isin", "registrar", "nominee"):
-                if r.get(k):
-                    meta[k] = r[k]
-            # The AMFI code is what prices a fund, so it wins the identifier
-            # slot; the folio stays in meta where the family record finds it.
-            ident = (r.get("identifier") or "").strip()
-            if r.get("scheme_code"):
-                if ident:
-                    meta["folio"] = ident
-                ident = r["scheme_code"]
-            h = Holding(owner_id=owners[oname], asset_class=cls,
-                        name=(r.get("name") or "").strip(),
-                        identifier=ident,
-                        units=float(r.get("units") or 0),
-                        avg_cost=float(r.get("avg_cost") or 0),
-                        last_price=float(r.get("last_price") or 0),
-                        price_date=date.today(), value_date=date.today(),
-                        meta=json.dumps(meta))
-            if not h.name:
+            meta, ident = _import_meta(r, cls)
+            name = (r.get("name") or "").strip()
+            if not name:
                 raise ValueError("name required")
-            s.add(h)
+            units = float(r.get("units") or 0)
+            avg_cost = float(r.get("avg_cost") or 0)
+            h = service.find_imported_holding(s, owners[oname], cls, meta,
+                                              ident)
+            if h is None:
+                h = Holding(owner_id=owners[oname], asset_class=cls,
+                            name=name, identifier=ident,
+                            value_date=date.today(),
+                            meta=json.dumps(dict(meta,
+                                                 source=db_mod.SOURCE_CAS)))
+                s.add(h)
+                added += 1
+            else:
+                service.replace_imported_rows(s, h)
+                # A statement whose layout defeated the name parser must not
+                # rename a fund the user can already read on screen.
+                if name != imp_mod.UNREADABLE_NAME:
+                    h.name = name
+                # Only when the statement actually carries something better.
+                if ident:
+                    h.identifier = ident
+                h.meta = json.dumps(service.merge_import_meta(h.meta_dict(),
+                                                              meta))
+                updated += 1
+            h.units, h.avg_cost = units, avg_cost
+            h.last_price = float(r.get("last_price") or 0)
+            h.price_date = date.today()
             s.flush()                 # need the id to hang transactions off
-            txns += _add_import_txns(s, h, r.get("transactions") or [])
-            added += 1
+            kept, earliest = _add_import_txns(s, h, r.get("transactions") or [])
+            txns += kept
+            _lot, conflict = service.set_imported_position(
+                s, h, units, avg_cost,
+                earliest or parse_date(r.get("purchase_date"))
+                or date.today())
+            if conflict:
+                # Purchases entered by hand come to more than the statement
+                # says is held. Neither side is discarded and neither is
+                # quietly averaged -- the disagreement is handed back.
+                conflicts.append(
+                    "%s: you have recorded %g more units than the statement "
+                    "reports, so its holding was left as you entered it. "
+                    "Check whether a purchase was entered twice, or sold "
+                    "somewhere this statement does not cover."
+                    % (name, conflict))
+            # The position always comes from the parcels, never from the
+            # number typed above them -- otherwise a holding whose statement
+            # was refused would report a quantity its own lots contradict.
+            ledger.recompute(h)
         except (ValueError, TypeError) as exc:
             errors.append("row %d: %s" % (i + 1, exc))
     s.commit()
     s.close()
-    return {"added": added, "transactions": txns, "errors": errors}
+    return {"added": added, "updated": updated, "transactions": txns,
+            "errors": errors, "conflicts": conflicts}
 
 
 # ---------------- transactions (optional, powers XIRR) ----------------
@@ -684,6 +899,384 @@ def add_txn(hid: int, body: schemas.TransactionIn):
     s.commit()
     s.close()
     return {"ok": True}
+
+
+# ---------------- journal ----------------
+# What the journal is responsible for. Funds are deliberately not here: they
+# are maintained from statements, and a sale recorded by hand against a lot
+# the next import replaces would leave a realised trade pointing at a parcel
+# that no longer exists. Funds are bought and sold through the registrar, and
+# the statement is what tells the app about it.
+JOURNAL_CLASSES = ("stock",)
+
+
+def _journal_holding(s, hid):
+    """A holding the journal may write to, or an error saying why not."""
+    h = s.get(Holding, hid)
+    if not h:
+        raise HTTPException(404, "holding not found")
+    if h.asset_class not in JOURNAL_CLASSES:
+        raise HTTPException(
+            400, "%s is a %s, which the journal does not maintain. Funds and "
+                 "deposits are updated from statements on the Portfolio page."
+                 % (h.name, ASSET_CLASS_LABELS.get(h.asset_class,
+                                                   h.asset_class)))
+    return h
+
+
+def _position_sleeve(lots):
+    """The sleeve a position sits in, or "mixed" when its parcels differ.
+
+    Holding one company as both a long-term position and a tactical trade is
+    a real thing to do, so it is allowed and labelled rather than forced into
+    one answer.
+    """
+    found = {ledger.sleeve_of(lot) for lot in lots}
+    if len(found) == 1:
+        return found.pop()
+    return "mixed"
+
+
+def _current_sleeve(holding):
+    """What a further purchase into this position should default to.
+
+    Adding to a position almost always means more of the same bet, so the
+    sleeve carries over -- and stays empty when the position has never been
+    assigned one, rather than inventing a default.
+    """
+    sleeve = _position_sleeve([lot for lot in holding.lots
+                               if lot.remaining > 1e-9])
+    return sleeve if sleeve in db_mod.SLEEVES else ""
+
+
+def _lot_out(lot):
+    return {"id": lot.id, "date": lot.date.isoformat(), "units": lot.units,
+            "remaining": lot.remaining, "price": lot.price,
+            "charges": lot.charges, "stoploss": lot.stoploss,
+            "cost_per_unit": round(
+                ledger.lot_cost_per_unit(lot.units, lot.price, lot.charges), 4),
+            "source": lot.source, "date_known": bool(lot.date_known),
+            "sleeve": ledger.sleeve_of(lot),
+            "notes": lot.notes}
+
+
+def _trade_out(t, name=""):
+    return {"id": t.id, "holding_id": t.holding_id, "name": name,
+            "buy_date": t.buy_date.isoformat(),
+            "sell_date": t.sell_date.isoformat(), "units": t.units,
+            "buy_price": t.buy_price, "sell_price": t.sell_price,
+            "charges": t.charges, "realised": t.realised,
+            "reason": t.reason,
+            "reason_label": ledger.REASONS.get(t.reason, t.reason),
+            "gain_type": t.gain_type, "sleeve": ledger.sleeve_of(t),
+            "sleeve_label": ledger.SLEEVE_LABELS[ledger.sleeve_of(t)],
+            "notes": t.notes}
+
+
+@app.get("/api/journal")
+def journal():
+    """Open positions with their parcels, closed trades, and capital in.
+
+    One call because the page shows them together: what is held, what it
+    cost, what has been closed and why.
+    """
+    s = db()
+    names = {h.id: h.name for h in s.query(Holding)}
+    positions = []
+    for h in s.query(Holding).filter(
+            Holding.asset_class.in_(sorted(JOURNAL_CLASSES))
+            ).order_by(Holding.name):
+        open_lots = [lot for lot in h.lots if lot.remaining > 1e-9]
+        if not open_lots:
+            continue                 # never held, or fully exited
+        d = service.holding_out(h)
+        positions.append({
+            "holding_id": h.id, "name": h.name, "owner": d["owner"],
+            "asset_class": h.asset_class, "identifier": h.identifier,
+            "units": d["units"], "avg_cost": d["avg_cost"],
+            "last_price": h.last_price, "current_value": d["current_value"],
+            "invested": d["invested"],
+            "open_pnl": round(d["current_value"] - d["invested"], 2),
+            "cap_label": d["cap_label"],
+            "sleeve": _position_sleeve(open_lots),
+            "lots": [_lot_out(lot) for lot in open_lots],
+        })
+    sleeve_input = [(list(h.lots), h.last_price) for h in s.query(Holding)
+                    .filter(Holding.asset_class.in_(sorted(JOURNAL_CLASSES)))]
+    trades = s.query(RealisedTrade).order_by(RealisedTrade.sell_date.desc(),
+                                             RealisedTrade.id.desc()).all()
+    flows = s.query(CapitalFlow).order_by(CapitalFlow.date).all()
+    owners = {o.id: o.name for o in s.query(Owner)}
+    out = {
+        "positions": positions,
+        "trades": [_trade_out(t, names.get(t.holding_id, "")) for t in trades],
+        "realised": ledger.realised_summary(trades),
+        "stoploss": ledger.stoploss_verdict(trades),
+        "by_sleeve": ledger.by_sleeve(sleeve_input, trades),
+        "sleeves": [{"value": k, "label": ledger.SLEEVE_LABELS[k]}
+                    for k in db_mod.SLEEVES],
+        "capital": {
+            "net": ledger.cash_moved(flows),
+            "flows": [{"id": f.id, "date": f.date.isoformat(),
+                       "owner": owners.get(f.owner_id, ""),
+                       "direction": f.direction, "amount": f.amount,
+                       "notes": f.notes} for f in flows],
+        },
+        "open_value": round(sum(p["current_value"] for p in positions), 2),
+        "open_pnl": round(sum(p["open_pnl"] for p in positions), 2),
+        "deployed": round(sum(p["invested"] for p in positions), 2),
+        "reasons": [{"value": k, "label": v}
+                    for k, v in ledger.REASONS.items()],
+    }
+    s.close()
+    return out
+
+
+@app.post("/api/journal/buy")
+def journal_buy(body: schemas.JournalBuy):
+    """Record a purchase, opening the position if it is a first buy."""
+    s = db()
+    try:
+        if body.holding_id is not None:
+            h = _journal_holding(s, body.holding_id)
+        else:
+            if body.asset_class not in JOURNAL_CLASSES:
+                raise HTTPException(
+                    400, "The journal records shares. Add a %s on the "
+                         "Portfolio page." % ASSET_CLASS_LABELS.get(
+                             body.asset_class, body.asset_class))
+            owner = None
+            if body.owner:
+                owner = s.query(Owner).filter(Owner.name == body.owner).first()
+            owner = owner or s.query(Owner).first()
+            h = Holding(owner_id=owner.id, asset_class=body.asset_class,
+                        name=(body.name or "").strip(),
+                        identifier=body.identifier,
+                        value_date=date.today(),
+                        meta=json.dumps({"source": db_mod.SOURCE_MANUAL}))
+            s.add(h)
+            s.flush()
+        when = parse_date(body.date) or date.today()
+        lot = ledger.add_lot(s, h, when, body.units, body.price,
+                             charges=body.charges, stoploss=body.stoploss,
+                             notes=body.notes, sleeve=body.sleeve
+                             or _current_sleeve(h))
+        s.flush()                 # the lot needs an id to be pointed at
+        # The cashflow row is what XIRR reads; the lot is what the position
+        # reads. Both describe the same purchase, and are linked so that
+        # correcting one corrects the other.
+        s.add(Transaction(holding_id=h.id, date=when, type="buy",
+                          amount=body.units * body.price + body.charges,
+                          units=body.units, lot_id=lot.id,
+                          source=db_mod.SOURCE_MANUAL))
+        if not h.last_price:
+            h.last_price, h.price_date = body.price, when
+        s.commit()
+        out = {"ok": True, "holding_id": h.id, "units": h.units,
+               "avg_cost": h.avg_cost}
+    except ledger.LedgerError as exc:
+        s.rollback()
+        raise HTTPException(400, str(exc))
+    finally:
+        s.close()
+    return out
+
+
+@app.post("/api/journal/sell")
+def journal_sell(body: schemas.JournalSell):
+    """Sell units oldest-parcel-first and book what each realised."""
+    s = db()
+    try:
+        h = _journal_holding(s, body.holding_id)
+        when = parse_date(body.date) or date.today()
+        trades = ledger.sell(s, h, when, body.units, body.price,
+                             charges=body.charges, reason=body.reason,
+                             notes=body.notes)
+        txn = Transaction(holding_id=h.id, date=when, type="sell",
+                          amount=body.units * body.price - body.charges,
+                          units=body.units, source=db_mod.SOURCE_MANUAL)
+        s.add(txn)
+        s.flush()
+        for trade in trades:
+            trade.txn_id = txn.id
+        s.commit()
+        out = {"ok": True, "units_left": h.units,
+               "realised": round(sum(t.realised for t in trades), 2),
+               "trades": [_trade_out(t, h.name) for t in trades]}
+    except ledger.LedgerError as exc:
+        s.rollback()
+        raise HTTPException(400, str(exc))
+    finally:
+        s.close()
+    return out
+
+
+def _lot_or_404(s, lot_id):
+    lot = s.get(Lot, lot_id)
+    if not lot:
+        raise HTTPException(404, "that purchase is not here")
+    return lot, _journal_holding(s, lot.holding_id)
+
+
+@app.put("/api/journal/lots/{lot_id}")
+def edit_lot(lot_id: int, body: schemas.LotUpdate):
+    """Correct a purchase that was typed in wrongly.
+
+    Everything derived from it moves with it: the units held, the average
+    cost, the cashflow row XIRR reads, and the profit on any part of the
+    parcel already sold -- which was measured against the price being
+    corrected and would otherwise stay quietly wrong.
+    """
+    s = db()
+    try:
+        lot, h = _lot_or_404(s, lot_id)
+        changes = body.model_dump(exclude_unset=True)
+        if "date" in changes:
+            changes["date"] = parse_date(changes["date"])
+        trades = s.query(RealisedTrade).filter(
+            RealisedTrade.lot_id == lot.id).all()
+        ledger.update_lot(h, lot, trades, **changes)
+        txn = s.query(Transaction).filter(
+            Transaction.lot_id == lot.id).first()
+        if txn:
+            txn.date = lot.date
+            txn.units = lot.units
+            txn.amount = lot.units * lot.price + (lot.charges or 0)
+        s.commit()
+        out = {"ok": True, "units": h.units, "avg_cost": h.avg_cost}
+    except ledger.LedgerError as exc:
+        s.rollback()
+        raise HTTPException(400, str(exc))
+    finally:
+        s.close()
+    return out
+
+
+@app.delete("/api/journal/lots/{lot_id}")
+def delete_lot(lot_id: int):
+    """Remove a purchase that never happened."""
+    s = db()
+    try:
+        lot, h = _lot_or_404(s, lot_id)
+        trades = s.query(RealisedTrade).filter(
+            RealisedTrade.lot_id == lot.id).all()
+        s.query(Transaction).filter(
+            Transaction.lot_id == lot.id).delete(synchronize_session=False)
+        ledger.remove_lot(h, lot, trades)
+        s.commit()
+        out = {"ok": True, "units": h.units}
+    except ledger.LedgerError as exc:
+        s.rollback()
+        raise HTTPException(400, str(exc))
+    finally:
+        s.close()
+    return out
+
+
+@app.delete("/api/journal/trades/{trade_id}")
+def delete_trade(trade_id: int):
+    """Undo a sale that was recorded wrongly.
+
+    The units go back onto the parcel they came from. One order can close
+    several parcels, so the cashflow row is rebuilt from whichever of them
+    are left rather than deleted outright.
+    """
+    s = db()
+    trade = s.get(RealisedTrade, trade_id)
+    if not trade:
+        s.close()
+        raise HTTPException(404, "that sale is not here")
+    h = _journal_holding(s, trade.holding_id)
+    txn_id = trade.txn_id
+    ledger.unwind(h, trade)
+    s.delete(trade)
+    s.flush()
+    if txn_id:
+        siblings = s.query(RealisedTrade).filter(
+            RealisedTrade.txn_id == txn_id).all()
+        txn = s.get(Transaction, txn_id)
+        if txn and not siblings:
+            s.delete(txn)
+        elif txn:
+            txn.units = sum(t.units for t in siblings)
+            txn.amount = sum(t.units * t.sell_price - (t.charges or 0)
+                             for t in siblings)
+    s.commit()
+    s.close()
+    return {"ok": True}
+
+
+@app.put("/api/journal/{hid}/sleeve")
+def set_sleeve(hid: int, body: schemas.SleeveIn):
+    """File a position under core or satellite.
+
+    Applied to the parcels still held. Closed trades keep the sleeve they
+    were sold under, because re-labelling history would silently rewrite
+    what each sleeve is recorded as having earned.
+    """
+    s = db()
+    h = _journal_holding(s, hid)
+    for lot in h.lots:
+        if lot.remaining > 1e-9:
+            lot.sleeve = body.sleeve
+    s.commit()
+    s.close()
+    return {"ok": True}
+
+
+@app.post("/api/journal/capital")
+def add_capital_flow(body: schemas.CapitalFlowIn):
+    s = db()
+    owner = None
+    if body.owner:
+        owner = s.query(Owner).filter(Owner.name == body.owner).first()
+    owner = owner or s.query(Owner).first()
+    flow = CapitalFlow(owner_id=owner.id,
+                       date=parse_date(body.date) or date.today(),
+                       direction=body.direction, amount=body.amount,
+                       notes=body.notes)
+    s.add(flow)
+    s.commit()
+    s.close()
+    return {"ok": True}
+
+
+@app.delete("/api/journal/capital/{fid}")
+def delete_capital_flow(fid: int):
+    s = db()
+    flow = s.get(CapitalFlow, fid)
+    if not flow:
+        s.close()
+        raise HTTPException(404, "not found")
+    s.delete(flow)
+    s.commit()
+    s.close()
+    return {"ok": True}
+
+
+@app.get("/api/history/funds")
+def fund_history():
+    """Month-end value of the funds, back to the first recorded purchase.
+
+    Reconstructed from the transaction history a statement carries, and kept
+    apart from the snapshots for that reason: a snapshot is what the app
+    saw on a day it was open, and this is what the evidence implies. Shares
+    and balances are absent because nothing records when they were bought.
+    """
+    s = db()
+    funds = []
+    for h in s.query(Holding).filter(Holding.asset_class == "mutual_fund"):
+        txns = [t for t in h.transactions if t.units]
+        if txns:
+            funds.append((txns, h.last_price))
+    points = history.fund_history(funds)
+    covered = len(funds)
+    total_funds = s.query(Holding).filter(
+        Holding.asset_class == "mutual_fund").count()
+    s.close()
+    return {"points": points, "funds_covered": covered,
+            "funds_total": total_funds,
+            "starts": points[0]["date"] if points else None}
 
 
 @app.get("/api/xirr")
@@ -759,6 +1352,14 @@ def refresh_prices():
     # Fetched together and de-duplicated: the same stock held by two people
     # is one price, and thirty holdings should not mean thirty waits.
     prices = pricing.fetch_stock_prices([h.identifier for h in priceable])
+    # The size classification rides along with the refresh: half-yearly, so
+    # it is almost always already fresh and costs nothing, and this is the
+    # one moment the user has asked the app to go online anyway.
+    try:
+        cap_list = stockcaps.refresh()
+    except Exception:                    # never let it break the prices
+        cap_list = {"status": "unavailable",
+                    "as_of": (stockcaps.load() or {}).get("as_of")}
     for h in priceable:
         px, pd_ = prices.get(h.identifier.strip(), (None, None))
         if px and analytics.price_would_break_value(
@@ -793,7 +1394,7 @@ def refresh_prices():
             "mf_placeholders": mf_placeholders,
             "stocks_updated": stock_updated, "stock_failed": failed,
             "stock_no_ticker": no_ticker, "reason": reason,
-            "stock_reason": stock_reason}
+            "stock_reason": stock_reason, "cap_list": cap_list}
 
 
 # A recorded price is only worth comparing against today's NAV when it is
@@ -1945,9 +2546,14 @@ class AppFiles(StaticFiles):
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
         kind = response.headers.get("content-type", "")
+        # Starlette hands this path in the OS separator, so on Windows it
+        # arrives as "assets\index-abc123.js" and a check for "assets/" never
+        # matched -- every built asset was served uncached on exactly the
+        # platform this app ships a desktop build for.
+        where = path.replace("\\", "/")
         if kind.startswith("text/html"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        elif "assets/" in path:
+        elif "assets/" in where:
             response.headers["Cache-Control"] = ("public, max-age=31536000, "
                                                  "immutable")
         return response

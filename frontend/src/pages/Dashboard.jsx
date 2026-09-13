@@ -1,11 +1,25 @@
+import { useEffect, useState } from 'react'
 import { api, BUCKET_LABELS, inr } from '../api'
-import { AllocationChart, CapMixChart, DonutByClass, OwnerBar, TrendChart } from '../components/Charts'
+import { AllocationChart, CapMixChart, DonutByClass, FundHistoryChart, OwnerBar, TrendChart } from '../components/Charts'
 import Warnings from '../components/Warnings'
 
 export default function Dashboard({ summary, meta, reload }) {
   const s = summary
   const takeSnapshot = async () => { await api.post('/api/snapshots'); reload() }
   const empty = !s.holdings.length
+  // The money-weighted return. Computed from the transaction history a
+  // statement carries, so it is blank until one has been imported — which
+  // is also why importing one appeared to change nothing.
+  const [xirr, setXirr] = useState(null)
+  const [showXirr, setShowXirr] = useState(false)
+  const [funds, setFunds] = useState(null)
+  useEffect(() => {
+    api.get('/api/xirr').then(setXirr).catch(() => {})
+    api.get('/api/history/funds').then(setFunds).catch(() => {})
+  }, [summary])
+  const ranked = (xirr?.holdings || [])
+    .filter((h) => h.xirr_pct !== null)
+    .sort((a, b) => b.xirr_pct - a.xirr_pct)
 
   return (
     <div className="grid">
@@ -57,6 +71,49 @@ export default function Dashboard({ summary, meta, reload }) {
         </div>
       </div>
 
+      {xirr && xirr.overall_pct !== null && (
+        <div className="card">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div>
+              <div className="label">Return so far (XIRR)</div>
+              <div className="value">{xirr.overall_pct}%</div>
+              <div className="sub">
+                Money-weighted, from {ranked.length} holding
+                {ranked.length === 1 ? '' : 's'} with a recorded history —
+                what your money actually earned, not what the funds returned.
+              </div>
+            </div>
+            {ranked.length > 0 && (
+              <button onClick={() => setShowXirr(!showXirr)}>
+                {showXirr ? 'Hide' : 'By holding'}
+              </button>
+            )}
+          </div>
+          {showXirr && (
+            <div style={{ overflowX: 'auto', marginTop: 8 }}>
+              <table>
+                <thead>
+                  <tr><th>Holding</th><th className="num">XIRR</th></tr>
+                </thead>
+                <tbody>
+                  {ranked.map((h) => (
+                    <tr key={h.holding_id}>
+                      <td>{h.name}</td>
+                      <td className="num">{h.xirr_pct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="small muted">
+                A holding is missing here when nothing records when it was
+                bought. Import a full-history CAS, or record purchases in the
+                Journal, and it appears.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid cols-2">
         <div className="card">
           <h2>By asset class</h2>
@@ -96,6 +153,18 @@ export default function Dashboard({ summary, meta, reload }) {
           <p className="small muted">Educational nudges only — not investment advice.</p>
         </div>
       </div>
+
+      {funds && funds.points && funds.points.length > 1 && (
+        <div className="card">
+          <h2>Mutual funds since {funds.starts}</h2>
+          <p className="muted">
+            What the funds were worth month by month, against what you had put
+            in — reconstructed from your statement, which is why it reaches
+            back further than the snapshots below.
+          </p>
+          <FundHistoryChart history={funds} />
+        </div>
+      )}
 
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>

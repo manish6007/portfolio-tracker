@@ -64,6 +64,175 @@ COLUMN_ALIASES = {
     ],
 }
 
+# ---- tradebooks ----------------------------------------------------------
+# A holdings export says what you own; a tradebook says what you did. They
+# look alike to a column sniffer -- both carry a symbol, a quantity and a
+# price -- but importing one as the other is a disaster: every row of a
+# tradebook becomes its own holding, so four hundred trades become four
+# hundred copies of forty stocks.
+#
+# What tells them apart is a column saying buy or sell. A position has no
+# direction; a trade is nothing without one.
+TRADE_ALIASES = {
+    "date": ["trade date", "date", "order execution time", "trade_date",
+             "transaction date", "settlement date"],
+    "side": ["trade type", "transaction type", "trade_type", "type",
+             "buy sell", "buy/sell", "b/s", "action"],
+    "symbol": ["symbol", "tradingsymbol", "trading symbol", "scrip",
+               "scrip name", "ticker", "nse symbol", "instrument"],
+    "isin": ["isin", "isin code"],
+    "name": ["security name", "company name", "stock name", "name",
+             "instrument name", "particulars"],
+    "quantity": ["quantity", "qty", "no of shares", "shares"],
+    "price": ["price", "market rate", "rate", "trade price", "avg price"],
+    "charges": ["total charges", "charges", "brokerage total", "taxes"],
+}
+
+BUY_WORDS = {"buy", "b", "bought", "purchase", "p"}
+SELL_WORDS = {"sell", "s", "sold", "sale"}
+
+
+def _trade_column(headers, field):
+    """The header holding a trade field, matched exactly then loosely."""
+    norm = {normalise_header(h): h for h in headers}
+    for alias in TRADE_ALIASES[field]:
+        if alias in norm:
+            return norm[alias]
+    for alias in TRADE_ALIASES[field]:
+        for key, original in norm.items():
+            if len(alias) > 3 and alias in key:
+                return original
+    return None
+
+
+def trade_columns(headers):
+    """Which column holds what, for a tradebook, or {} when it is not one."""
+    found = {f: _trade_column(headers, f) for f in TRADE_ALIASES}
+    needed = ("date", "side", "quantity", "price")
+    if not all(found.get(f) for f in needed):
+        return {}
+    if not (found.get("symbol") or found.get("isin") or found.get("name")):
+        return {}
+    return {k: v for k, v in found.items() if v}
+
+
+def looks_like_tradebook(headers, records):
+    """True when the rows are trades rather than positions.
+
+    The columns alone are not enough -- a holdings export can carry a "type"
+    column meaning something else entirely -- so the values are checked too:
+    a tradebook's side column reads buy or sell and very little else.
+    """
+    cols = trade_columns(headers)
+    if not cols:
+        return False
+    sides = [str(r.get(cols["side"], "")).strip().lower()
+             for r in records[:50]]
+    known = [x for x in sides if x in BUY_WORDS or x in SELL_WORDS]
+    return len(known) >= max(1, len([x for x in sides if x]) * 0.8)
+
+
+def _trade_date(value):
+    """A trade date out of the several shapes brokers write it in."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.split("T")[0].split(" ")[0]
+    for pattern, order in ((r"^(\d{4})-(\d{2})-(\d{2})$", "ymd"),
+                           (r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$", "dmy"),
+                           (r"^(\d{1,2})-([A-Za-z]{3})-(\d{4})$", "dMy")):
+        m = re.match(pattern, text)
+        if not m:
+            continue
+        if order == "ymd":
+            return "%s-%s-%s" % m.groups()
+        if order == "dmy":
+            d, mo, y = m.groups()
+            return "%s-%02d-%02d" % (y, int(mo), int(d))
+        d, mo, y = m.groups()
+        month = MONTHS.get(mo.lower()[:3])
+        return "%s-%02d-%02d" % (y, month, int(d)) if month else ""
+    return ""
+
+
+def parse_tradebook(headers, records):
+    """Every trade in a broker export, oldest first.
+
+    Rows that cannot be read are dropped and counted rather than guessed at:
+    a trade with no date cannot be placed in the ledger, and one with no
+    quantity is not a trade.
+    """
+    cols = trade_columns(headers)
+    if not cols:
+        return [], ["Those columns do not look like a tradebook."]
+    trades, dropped = [], 0
+    for row in records:
+        side = str(row.get(cols["side"], "")).strip().lower()
+        kind = ("buy" if side in BUY_WORDS
+                else "sell" if side in SELL_WORDS else "")
+        when = _trade_date(row.get(cols["date"]))
+        qty = to_number(row.get(cols["quantity"]))
+        price = to_number(row.get(cols["price"]))
+        if not (kind and when and qty and price) or qty <= 0:
+            dropped += 1
+            continue
+        isin = str(row.get(cols.get("isin"), "") or "").strip().upper()
+        symbol = str(row.get(cols.get("symbol"), "") or "").strip().upper()
+        name = str(row.get(cols.get("name"), "") or "").strip()
+        trades.append({
+            "date": when, "type": kind, "units": abs(qty), "price": abs(price),
+            "charges": abs(to_number(row.get(cols.get("charges"))) or 0.0),
+            "isin": isin if re.fullmatch(r"[A-Z0-9]{12}", isin) else "",
+            "symbol": symbol, "name": name or symbol,
+        })
+    trades.sort(key=lambda t: (t["date"], t["name"]))
+    notes = []
+    if dropped:
+        notes.append("%d row%s could not be read as a trade and %s left out."
+                     % (dropped, "" if dropped == 1 else "s",
+                        "was" if dropped == 1 else "were"))
+    return trades, notes
+
+
+def group_trades(trades):
+    """Trades gathered per instrument, keyed by ISIN where there is one.
+
+    An ISIN survives a ticker being renamed, so it is preferred -- but a
+    company that changes ISIN mid-history (a split, a scheme of arrangement)
+    would otherwise split into two holdings, so a shared symbol pulls those
+    back together.
+    """
+    by_symbol = {}
+    for t in trades:
+        # Name before ISIN: a company that changes ISIN mid-history -- a
+        # split, a scheme of arrangement -- keeps its name, and keying on
+        # the ISIN would file the two halves as two different holdings.
+        key = t["symbol"] or t["name"].upper() or t["isin"]
+        by_symbol.setdefault(key, []).append(t)
+    out = []
+    for key, group in by_symbol.items():
+        isins = {t["isin"] for t in group if t["isin"]}
+        names = [t["name"] for t in group if t["name"]]
+        # Only a real ticker goes in `symbol`. A book that never prints one
+        # is grouped by company name, and putting that name here instead
+        # wrote "NGL FINE CHEM LTD" into the field that prices a share --
+        # which prices nothing, so the holding showed its whole cost as a
+        # loss. Empty is recoverable; a sentence is not.
+        symbol = next((t["symbol"] for t in group if t["symbol"]), "")
+        out.append({
+            "symbol": symbol,
+            "key": key,
+            # The most recent ISIN, since that is the one it trades under now
+            # -- but every one it has traded under is kept, because a public
+            # list may not carry a code issued last month.
+            "isin": sorted(isins)[-1] if isins else "",
+            "isins": sorted(isins),
+            "name": max(set(names), key=names.count) if names else key,
+            "trades": sorted(group, key=lambda t: t["date"]),
+        })
+    return sorted(out, key=lambda g: g["name"])
+
+
 # Fields the UI offers in the mapping dropdowns, in display order.
 MAPPABLE = ["identifier", "name", "units", "avg_cost", "last_price",
             "invested", "current_value", "purchase_date"]
@@ -435,6 +604,11 @@ SCHEME_RE = re.compile(r"^\s*(?!\d{1,2}-)([A-Z0-9]{2,10})\s*[-–]\s*"
 BLOCK_BOUNDARY = re.compile(r"Folio\s*No|Opening\s*Unit\s*Balance", re.I)
 NOMINEE_RE = re.compile(r"Nominee\s*1\s*[:.]\s*([A-Za-z][A-Za-z .'’-]{2,60}?)"
                         r"\s*(?=Nominee\s*\d|$)", re.I | re.M)
+# What a scheme is called when the statement's layout defeated the
+# name parser. Named so that an import can recognise its own placeholder
+# and decline to write it over a name that is already good.
+UNREADABLE_NAME = "Scheme (name not read)"
+
 DETAILED_MARKER = re.compile(r"(Opening|Closing)\s*Unit\s*Balance", re.I)
 
 # A transaction row: date, description, amount, units, price, unit balance.
@@ -446,6 +620,60 @@ TXN_RE = re.compile(
     r"\(?(-?[\d,]+\.\d{2,4})\)?\s+"
     r"([\d,]+\.\d{2,4})\s+"
     r"([\d,]+\.\d{2,4})\s*$")
+
+# The other layout CAMS prints, and the one a full-history statement uses:
+# date, amount, then the NAV and the units *run together with no space*,
+# then the description, then the closing balance.
+#
+#   10-Apr-2017 3,000.00 51.30558.474Purchase - via Online - DIRECT 58.474
+#
+# "51.30558.474" is NAV 51.305 and 58.474 units. Nothing in the text says
+# where one ends and the other begins -- but the amount does, since amount
+# divided by NAV is the units, so the split is found by arithmetic rather
+# than guessed at. Stamp-duty and "SIP Registered" lines carry no amount in
+# this position and so cannot match.
+TXN_MERGED_RE = re.compile(
+    r"^\s*(\d{2}-[A-Za-z]{3}-\d{4})\s+"
+    r"\(?(-?[\d,]+\.\d{2})\)?\s+"
+    r"([\d,]*\.[\d,]*\.?[\d,]*)"
+    r"([A-Za-z(].*?)"
+    r"(?:\s+\(?(-?[\d,]+\.\d{2,4})\)?)?\s*$")
+
+# How far the units implied by amount/NAV may sit from the units read off the
+# split before the row is dropped. Wide enough for a statement that rounds
+# NAV to four places, far too tight for a wrong split, which is out by orders
+# of magnitude rather than fractions of a percent.
+SPLIT_TOLERANCE = 0.01
+
+
+def split_nav_units(merged, amount):
+    """(NAV, units) out of one run-together token, or None.
+
+    Every candidate split is tested against the amount: the right one has
+    amount / NAV equal to the units, and a wrong one misses by a factor of
+    ten or more. A token that cannot be split convincingly returns None and
+    its row is skipped, because a misread unit count would corrupt the
+    holding rather than merely lose one row.
+    """
+    dots = [i for i, ch in enumerate(merged) if ch == "."]
+    if len(dots) != 2 or not amount:
+        return None
+    best = None
+    for cut in range(dots[0] + 1, dots[1] + 1):
+        left, right = merged[:cut], merged[cut:]
+        if not left or not right or right.startswith(","):
+            continue
+        nav, units = to_number(left), to_number(right)
+        if not nav or not units:
+            continue
+        err = abs(abs(amount) / nav - units) / units
+        if best is None or err < best[0]:
+            best = (err, nav, units)
+    if best is None or best[0] > SPLIT_TOLERANCE:
+        return None
+    return best[1], best[2]
+
+
 MONTHS = {m: i + 1 for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun",
      "jul", "aug", "sep", "oct", "nov", "dec"])}
@@ -460,15 +688,25 @@ def _cas_date(token):
 
 def _txn_type(description):
     text = description.lower()
-    if "stamp" in text or "tax" in text:
-        return ""                       # a deduction, not a cashflow of yours
+    # Deductions, not cashflows of yours. Matched narrowly on purpose: a
+    # bare "tax" also matches every purchase into an ELSS *Tax* Saver fund,
+    # which is how one holding lost 3,600 units of switch-in history.
+    if "stamp" in text or "tds" in text or "transaction tax" in text:
+        return ""
+    # Sell-side first: "Switch Over Out" carries the word the buy
+    # list also looks for, and reading an exit as an entry would
+    # add units nobody has.
     if any(w in text for w in ("redemption", "switch out", "switch-out",
+                               "switch over out", "lateral shift out",
                                "sell", "withdrawal", "swo")):
         return "sell"
     if "idcw" in text or "dividend" in text:
         return "dividend"
-    if "purchase" in text or "switch in" in text or "sip" in text \
-            or "investment" in text or "systematic" in text:
+    # "Lateral shift" is a transfer between plans of one fund and "allotment"
+    # is an NFO; both put units in the folio and both were being dropped.
+    if any(w in text for w in ("purchase", "switch in", "switch over in",
+                               "lateral shift in", "allotment",
+                               "sip", "investment", "systematic")):
         return "buy"
     return ""
 
@@ -483,15 +721,21 @@ def parse_cas_transactions(block):
     out = []
     for line in block.splitlines():
         m = TXN_RE.match(line)
-        if not m:
-            continue
-        iso = _cas_date(m.group(1))
-        kind = _txn_type(m.group(2))
-        if not iso or not kind:
-            continue
-        amount = to_number(m.group(3))
-        units = to_number(m.group(4))
-        if not amount:
+        if m:
+            iso, desc = _cas_date(m.group(1)), m.group(2)
+            amount, units = to_number(m.group(3)), to_number(m.group(4))
+        else:
+            m = TXN_MERGED_RE.match(line)
+            if not m:
+                continue
+            iso, desc = _cas_date(m.group(1)), m.group(4)
+            amount = to_number(m.group(2))
+            split = split_nav_units(m.group(3), amount)
+            if not split:
+                continue           # unreadable rather than guessed at
+            units = split[1]
+        kind = _txn_type(desc)
+        if not iso or not kind or not amount:
             continue
         out.append({"date": iso, "type": kind,
                     "amount": round(abs(amount), 2),
@@ -566,7 +810,7 @@ def parse_cas(text, owner="Me"):
             scheme_m = SCHEME_RE.search(block)
             scheme = _clean_scheme(scheme_m.group(2)) if scheme_m else ""
         if not is_plausible_scheme(scheme):
-            scheme = "Scheme (name not read)"
+            scheme = UNREADABLE_NAME
             notes.append("A scheme name could not be read for folio %s — set "
                          "it by hand after importing." % (folio or isin))
         # Transactions are only worth keeping when the statement covers the
@@ -655,7 +899,7 @@ def parse_cas_summary(text, owner="Me"):
         date_m = NAV_DATE_TOKEN.search(after)
         registrar_m = REGISTRAR_TOKEN.search(after)
         if not is_plausible_scheme(scheme):
-            scheme = "Scheme (name not read)"
+            scheme = UNREADABLE_NAME
             notes.append("A scheme name could not be read for ISIN %s — set "
                          "it by hand after importing." % isin)
         rows.append({

@@ -83,7 +83,7 @@ def clear_data_dir():
     return data_dir()
 
 
-DATA_FILES = ("portfolio.db", "profiles.json")
+DATA_FILES = ("portfolio.db", "profiles.json", "stockcaps.json")
 
 
 def data_files(directory=None):

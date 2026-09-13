@@ -235,8 +235,11 @@ export function CapMixChart({ capMix }) {
       {capMix.unclassified > 0 && (
         <div className="small" style={{ color: 'var(--serious)' }}>
           {inr(capMix.unclassified)} of equity ({capMix.unclassified_pct}%) is
-          not classified, so the percentages above are of the rest. Set{' '}
-          <b>Company size</b> on these, on the Portfolio page:
+          not classified, so the percentages above are of the rest. Shares are
+          looked up in AMFI's list when prices are refreshed; these were not
+          found on it, so either the ticker is missing or the company is not
+          listed in India. Give them a ticker or set <b>Company size</b> by
+          hand, on the Portfolio page:
           {/* Naming them is the point — "something is unclassified" with no
               way to find out what sends the reader hunting through the
               table. */}
@@ -250,13 +253,64 @@ export function CapMixChart({ capMix }) {
         </div>
       )}
       <p className="small muted" style={{ marginBottom: 0 }}>
-        Funds are read from their own SEBI category; hover a bar to see which
-        holdings are in it and why. A fund's split is its mandate, not its
-        actual portfolio on the day.
+        Funds are read from their own SEBI category; shares from AMFI's
+        half-yearly list of the top 100 and 250 companies. Hover a bar to see
+        which holdings are in it and why. A fund's split is its mandate, not
+        its actual portfolio on the day.
       </p>
     </>
   )
 }
+
+export function FundHistoryChart({ history }) {
+  const points = history?.points || []
+  if (points.length < 2) return null
+  const data = points.map((p) => ({
+    date: p.date, Value: p.value, Invested: p.invested,
+  }))
+  // How much money in any month rests on a price more than a quarter old.
+  // Counting stale *months* made one neglected fund look like the whole line
+  // was guesswork; what matters is how much value it actually moves.
+  const worst = Math.max(...points.map((p) => p.stale_pct || 0))
+  return (
+    <>
+      <ResponsiveContainer width="100%" height={280}>
+        <LineChart data={data} margin={{ top: 8, right: 8, left: 8 }}>
+          <CartesianGrid stroke="var(--grid)" vertical={false} />
+          <XAxis dataKey="date" tick={axisTick} axisLine={{ stroke: 'var(--baseline)' }}
+            tickLine={false} minTickGap={40} />
+          <YAxis tick={axisTick} tickFormatter={inrShort} axisLine={false}
+            tickLine={false} width={64} />
+          <Tooltip contentStyle={tooltipStyle} formatter={(v) => inr(v)} />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          <Line type="monotone" dataKey="Value" stroke="var(--series-1)"
+            strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="Invested" stroke="var(--series-3)"
+            strokeWidth={2} dot={false} />
+        </LineChart>
+      </ResponsiveContainer>
+      <p className="small muted" style={{ marginBottom: 0 }}>
+        Reconstructed from the transactions in your statement, not recorded
+        at the time: units held each month come straight from the purchases,
+        and the price is the one your own transactions paid, interpolated
+        between them and anchored at today&rsquo;s NAV.
+        {history.funds_covered < history.funds_total && (
+          <> {history.funds_total - history.funds_covered} of{' '}
+          {history.funds_total} funds are left out because the statement
+          carries no history for them.</>
+        )}
+        {worst >= 1 && (
+          <> At its worst, {worst.toFixed(0)}% of a month&rsquo;s value rests
+          on a price more than a quarter old — that part of the line is drawn
+          straight through a period that was not.</>
+        )}
+        {' '}Shares and deposits are not here at all — nothing records when
+        they were bought.
+      </p>
+    </>
+  )
+}
+
 
 export function TrendChart({ snapshots }) {
   if (!snapshots.length) {

@@ -131,6 +131,15 @@ export default function Portfolio({ summary, meta, owners, reload }) {
           + '. Put the NSE symbol there (e.g. RELIANCE for Reliance'
           + ' Industries).')
       }
+      // Only worth a line when it changed or is missing: a list that was
+      // already current is the normal case and does not need announcing.
+      if (r.cap_list?.status === 'updated') {
+        bits.push('company sizes taken from AMFI’s list of '
+          + r.cap_list.as_of)
+      } else if (r.cap_list?.status === 'unavailable') {
+        bits.push('AMFI’s large/mid/small list could not be fetched, so'
+          + ' shares stay unclassified in the company-size chart.')
+      }
       const m = bits.join(' · ')
       setMsg(m)
       reload()
@@ -431,7 +440,9 @@ export default function Portfolio({ summary, meta, owners, reload }) {
                               : 'var(--serious)' }}
                           title={h.cap_source
                             ? h.cap_source
-                            : 'Nothing could be read from the name — set it here, or this holding stays out of the company-size chart'}
+                            : h.asset_class === 'stock'
+                              ? 'Not found on AMFI’s list — give it a ticker and refresh prices, or set it here, otherwise this holding stays out of the company-size chart'
+                              : 'Nothing could be read from the name — set it here, or this holding stays out of the company-size chart'}
                           onChange={async (ev) => {
                             await api.put('/api/holdings/' + h.id,
                               { meta: { cap: ev.target.value } })

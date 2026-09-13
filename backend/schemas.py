@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from analytics import FREQUENCY_MONTHS
-from db import ASSET_CLASSES
+from db import ASSET_CLASSES, SLEEVES
 
 
 class Strict(BaseModel):
@@ -112,6 +112,105 @@ class TransactionIn(Strict):
     units: float = 0.0
 
 
+# ---------------- journal ----------------
+class JournalBuy(Strict):
+    """A purchase, recorded as its own parcel.
+
+    `holding_id` adds to a position already held; a name plus identifier
+    opens a new one. Charges are asked for rather than assumed, because a
+    cost base that ignores brokerage overstates every return computed from
+    it, and a zero is a claim the user can make deliberately.
+    """
+    holding_id: Optional[int] = None
+    owner: Optional[str] = None
+    name: Optional[str] = None
+    identifier: str = ""
+    asset_class: str = "stock"
+    date: str
+    units: float = Field(gt=0)
+    price: float = Field(ge=0)
+    charges: float = Field(default=0.0, ge=0)
+    stoploss: float = Field(default=0.0, ge=0)
+    sleeve: str = ""
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def _identifies_a_holding(self):
+        if self.holding_id is None and not (self.name or "").strip():
+            raise ValueError("give holding_id, or a name to open a position")
+        if self.asset_class not in ASSET_CLASSES:
+            raise ValueError("bad asset_class %r" % self.asset_class)
+        if self.sleeve and self.sleeve not in SLEEVES:
+            raise ValueError("sleeve must be one of %s" % ", ".join(SLEEVES))
+        return self
+
+
+class JournalSell(Strict):
+    """A sale against a position, with the reason it was exited.
+
+    The reason is required. It is the only field here that cannot be
+    reconstructed later, and without it the app can never answer whether
+    stopping out helps or hurts across many trades.
+    """
+    holding_id: int
+    date: str
+    units: float = Field(gt=0)
+    price: float = Field(ge=0)
+    charges: float = Field(default=0.0, ge=0)
+    reason: str
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def _known_reason(self):
+        from ledger import REASONS
+        if self.reason not in REASONS:
+            raise ValueError("reason must be one of %s"
+                             % ", ".join(sorted(REASONS)))
+        return self
+
+
+class LotUpdate(Strict):
+    """A correction to a purchase already recorded.
+
+    All-optional and read with exclude_unset, so sending only a price moves
+    only the price. Quantity is checked against what has already been sold
+    out of the parcel by the ledger, not here.
+    """
+    date: Optional[str] = None
+    units: Optional[float] = Field(default=None, gt=0)
+    price: Optional[float] = Field(default=None, ge=0)
+    charges: Optional[float] = Field(default=None, ge=0)
+    stoploss: Optional[float] = Field(default=None, ge=0)
+    sleeve: Optional[str] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _known_sleeve(self):
+        if self.sleeve and self.sleeve not in SLEEVES:
+            raise ValueError("sleeve must be one of %s" % ", ".join(SLEEVES))
+        return self
+
+
+class SleeveIn(Strict):
+    """Which sleeve a position belongs to, applied to what is still held."""
+    sleeve: str
+
+    @model_validator(mode="after")
+    def _known_sleeve(self):
+        if self.sleeve not in SLEEVES:
+            raise ValueError("sleeve must be one of %s" % ", ".join(SLEEVES))
+        return self
+
+
+class CapitalFlowIn(Strict):
+    """Money moved into or out of the investing pot, on its own."""
+    owner: Optional[str] = None
+    date: str
+    direction: Literal["in", "out"]
+    amount: float = Field(gt=0)
+    notes: str = ""
+
+
 # ---------------- import ----------------
 class ImportRow(Loose):
     """One row from the preview, confirmed by the user.
@@ -134,6 +233,35 @@ class ImportRow(Loose):
     nominee: Optional[str] = None
     scheme_code: Optional[str] = None
     transactions: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class TradeIn(Loose):
+    """One trade as the tradebook parser produced it."""
+    date: str
+    type: str
+    units: float = Field(gt=0)
+    price: float = Field(ge=0)
+    charges: float = 0.0
+
+
+class TradeGroup(Loose):
+    """Every trade in one company, as the preview grouped them."""
+    symbol: str = ""
+    name: str = ""
+    isin: str = ""
+    isins: List[str] = Field(default_factory=list)
+    trades: List[TradeIn] = Field(default_factory=list)
+
+
+class TradebookCommit(Strict):
+    """Confirmed tradebook rows, plus the name of the book they came from.
+
+    `book` scopes what a re-import replaces, so a second broker's trades do
+    not delete the first's.
+    """
+    book: str = Field(min_length=1, max_length=60)
+    groups: List[TradeGroup] = Field(default_factory=list)
+    owner: Optional[str] = None
 
 
 class ImportCommit(Strict):

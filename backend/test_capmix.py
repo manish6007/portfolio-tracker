@@ -12,8 +12,29 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import pytest  # noqa: E402
+
 import analytics  # noqa: E402
 import capmix  # noqa: E402
+import config  # noqa: E402
+import stockcaps  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def no_downloaded_list(tmp_path, monkeypatch):
+    """These tests are about reading names, not AMFI's list.
+
+    Without this they would quietly read whatever list the machine running
+    them has cached, so the same test would pass here and fail on a laptop
+    that had never refreshed prices.
+    """
+    monkeypatch.setattr(config, "BASE", str(tmp_path))
+    monkeypatch.setattr(config, "CONFIG_PATH",
+                        str(tmp_path / "app-config.json"))
+    monkeypatch.delenv(config.ENV_DATA_DIR, raising=False)
+    stockcaps.forget()
+    yield
+    stockcaps.forget()
 
 
 def label(name):

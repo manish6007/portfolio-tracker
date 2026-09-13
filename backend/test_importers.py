@@ -607,3 +607,89 @@ def test_reading_xlsx_is_available_not_optional():
     """
     import openpyxl                              # noqa: F401
     assert imp.read_table(_workbook([("S", HOLDINGS)]), "x.xlsx")[1]
+
+
+# ---- the layout where NAV and units are run together ---------------------
+# A full-history CAS prints "10-Apr-2017 3,000.00 51.30558.474Purchase ..."
+# where 51.305 is the NAV and 58.474 the units, with nothing between them.
+# The transaction parser read none of these, so a statement covering nine
+# years imported as a balance with no history at all.
+MERGED_BLOCK = """
+D782-DSP Mid Cap Fund - Direct Plan - Growth - ISIN: INF740K01PX1
+Folio No: 1000000002 / 0
+ Opening Unit Balance: 0.000
+08-Apr-2017 ***SIP Registered - via Online***
+10-Apr-2017 3,000.00 51.30558.474Purchase - via Online - DIRECT 58.474
+08-May-2017 3,000.00 53.59555.975SIP Purchase - Instalment 1/985 - DIRECT 114.449
+10-Jul-2020 0.20*** Stamp Duty ***
+30-Aug-2021 251,487.43 80.04453,141.845Switch Over In (From Axis Regular)
+28-Aug-2020 1,999.90 10.0000199.990Initial Allotment Trxn.Ref.No.pay_X/ICICI
+18-Dec-2018 7,500.00 46.2921162.015Lateral Shift In (From Axis Liquid Fund)
+Closing Unit Balance: 3,618.299 Total Cost Value: 265,987.33
+"""
+
+
+def test_a_run_together_nav_and_unit_count_are_split_by_the_amount():
+    """Nothing in the text says where the NAV ends, but amount / NAV does."""
+    assert imp.split_nav_units("51.30558.474", 3000.0) == (51.305, 58.474)
+    assert imp.split_nav_units("29.5470101.533", 3000.0) \
+        == (29.547, 101.533)
+
+
+def test_a_split_survives_thousands_separators_in_the_unit_count():
+    nav, units = imp.split_nav_units("80.04453,141.845", 251487.43)
+    assert (nav, units) == (80.0445, 3141.845)
+
+
+def test_a_token_that_cannot_be_split_convincingly_is_refused():
+    """Better to drop the row than to invent a unit count."""
+    assert imp.split_nav_units("51.30558.474", 999999.0) is None
+    assert imp.split_nav_units("no.dots.here", 3000.0) is None
+    assert imp.split_nav_units("51.305", 3000.0) is None
+
+
+def test_the_run_together_layout_is_read():
+    txns = imp.parse_cas_transactions(MERGED_BLOCK)
+    by_date = {t["date"]: t for t in txns}
+    assert by_date["2017-04-10"]["units"] == 58.474
+    assert by_date["2017-04-10"]["amount"] == 3000.0
+    assert by_date["2017-04-10"]["type"] == "buy"
+    assert by_date["2017-05-08"]["units"] == 55.975
+
+
+def test_stamp_duty_and_marker_lines_are_not_transactions():
+    txns = imp.parse_cas_transactions(MERGED_BLOCK)
+    assert "2020-07-10" not in {t["date"] for t in txns}   # stamp duty
+    assert "2017-04-08" not in {t["date"] for t in txns}   # SIP registered
+
+
+def test_a_switch_into_an_elss_fund_is_not_mistaken_for_a_tax_deduction():
+    """A bare "tax" test also matched "Tax Saver" in a fund's own name, and
+    silently dropped 3,600 units of a real holding."""
+    assert imp._txn_type(
+        "Switch Over In (From Axis ELSS- Tax Saver Fund - Regular Growth)") \
+        == "buy"
+    assert imp._txn_type("*** Stamp Duty ***") == ""
+    assert imp._txn_type("Securities Transaction Tax") == ""
+
+
+def test_the_other_ways_units_arrive_are_all_counted():
+    txns = imp.parse_cas_transactions(MERGED_BLOCK)
+    dates = {t["date"]: t["units"] for t in txns}
+    assert dates["2021-08-30"] == 3141.845      # switch over in
+    assert dates["2020-08-28"] == 199.99        # NFO allotment
+    assert dates["2018-12-18"] == 162.015       # lateral shift in
+
+
+def test_the_parsed_units_add_up_to_the_closing_balance():
+    """The check that matters: a parse that misses rows is worse than one
+    that fails, because it looks like a smaller portfolio."""
+    txns = imp.parse_cas_transactions(MERGED_BLOCK)
+    total = sum(t["units"] for t in txns if t["type"] == "buy")
+    assert abs(total - 3618.299) < 0.01
+
+
+def test_an_exit_is_never_read_as_an_entry():
+    assert imp._txn_type("Switch Over Out (To Something)") == "sell"
+    assert imp._txn_type("Lateral Shift Out") == "sell"
+    assert imp._txn_type("Redemption - via Online") == "sell"

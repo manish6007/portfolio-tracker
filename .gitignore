@@ -3,9 +3,15 @@
 *.db
 *.db-wal
 *.db-shm
+# Copies of the portfolio carry exactly what the database does, and a
+# timestamp suffix slips past the patterns above.
+*.db.backup-*
+*.db-wal.backup-*
+*.db-shm.backup-*
 backend/profiles.json
 backend/profiles/
 backend/app-config.json
+backend/stockcaps.json
 __pycache__/
 *.pyc
 frontend/node_modules/

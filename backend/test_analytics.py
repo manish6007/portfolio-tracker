@@ -643,3 +643,59 @@ def test_the_export_spells_the_basis_out_for_a_stranger():
     assert analytics.income_basis_label("gross") == \
         "gross (before tax and deductions)"
     assert analytics.income_basis_label("") == ""
+
+
+# ---- the month in progress is not a whole month -------------------------
+class FakeEntry:
+    def __init__(self, when):
+        self.date = when
+
+
+def test_a_month_that_has_barely_started_is_not_counted_whole():
+    """The bug this fixes: six days into September, one entry turned the
+    divisor from 1 into 2 and halved the reported monthly spending."""
+    import service
+    from datetime import date as _date
+    rows = [FakeEntry(_date(2026, 8, 30)), FakeEntry(_date(2026, 9, 6))]
+    span = service._month_span(rows, today=_date(2026, 9, 6))
+    assert abs(span - (1 + 6 / 30)) < 1e-9
+
+
+def test_completed_months_still_count_as_one_each():
+    import service
+    from datetime import date as _date
+    rows = [FakeEntry(_date(2026, 6, 3)), FakeEntry(_date(2026, 7, 9)),
+            FakeEntry(_date(2026, 8, 30))]
+    assert service._month_span(rows, today=_date(2026, 9, 6)) == 3.0
+
+
+def test_a_few_days_of_entries_are_not_scaled_up_to_a_whole_month():
+    """₹10,000 on the 6th is ₹10,000 so far, not ₹50,000 a month."""
+    import service
+    from datetime import date as _date
+    rows = [FakeEntry(_date(2026, 9, 6))]
+    assert service._month_span(rows, today=_date(2026, 9, 6)) == 1.0
+
+
+def test_no_entries_is_still_zero_months():
+    import service
+    from datetime import date as _date
+    assert service._month_span([], today=_date(2026, 9, 6)) == 0
+
+
+def test_logging_an_expense_can_never_lower_the_monthly_average():
+    """The property that was violated, stated directly."""
+    import service
+    from datetime import date as _date
+    today = _date(2026, 9, 6)
+    before = analytics.monthly_cashflow(
+        287000, 30000, 3, [], income_months=1,
+        expense_months=service._month_span([FakeEntry(_date(2026, 8, 30))],
+                                           today=today))
+    after = analytics.monthly_cashflow(
+        287000, 40000, 3, [], income_months=1,
+        expense_months=service._month_span(
+            [FakeEntry(_date(2026, 8, 30)), FakeEntry(_date(2026, 9, 6))],
+            today=today))
+    assert after["expense_m"] > before["expense_m"]
+    assert after["surplus_m"] < before["surplus_m"]

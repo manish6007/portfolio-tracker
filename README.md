@@ -58,7 +58,28 @@ NAVs refresh by themselves afterwards, and the parsed totals are checked
 against the statement's own Total row so a partial read cannot pass silently.
 The detailed statement also carries each folio's nominee and its full
 transaction history, which are imported too — giving those holdings a real
-XIRR instead of an estimate.
+XIRR instead of an estimate. Request it with a **From date before your first
+investment**: a statement that opens mid-history has its transactions left
+out rather than producing a confidently wrong return.
+
+**Re-importing replaces, it never adds.** Upload next quarter's statement and
+each fund is matched by ISIN and folio and updated in place. Everything you
+set by hand survives — the company-size tag, a hand-built split, notes, and
+any transaction or purchase you entered yourself. A fund that is simply
+absent from a statement is left alone, because a CAMS file carries no
+KFintech folios and absence usually means "not covered", not "sold".
+
+**Broker tradebooks** — the one-row-per-trade export, not the holdings list —
+are recognised and replayed rather than read as positions, so four hundred
+trades do not become four hundred holdings. Zerodha and Kotak Neo layouts are
+understood, and a book that prints only an ISIN and a company name is matched
+to your tickers through AMFI's exchange list. Each book is named, and
+re-importing under the same name replaces what that book wrote, so a share
+held at two brokers keeps both sets of purchases. Trades you already entered
+in the Journal are recognised and not added twice. A book records history,
+not news: the shares it lists are already in your position, so importing one
+never changes what you hold — it gives purchases real dates and books every
+sale, which is what realised gains and holding periods need.
 
 ### See the risk inside your equity
 Asset allocation says how much is in equity. It does not say whether that
@@ -69,11 +90,56 @@ international — funds and direct shares in one chart. Funds are read from
 their own SEBI category (a Large Cap fund must hold 80% in the top 100; a
 Small Cap fund 65% beyond the top 250), a hybrid contributes only its equity
 sleeve, and hovering a bar lists exactly which holdings are in it and why.
-Shares carry no category in their name, so you tag those in the **Company
-size** column — which is offered on anything carrying equity, including a
-fund whose name says nothing and anything forced into equity by *Counts as*.
-Whatever stays untagged is listed by name under the chart rather than left
-as an unexplained total.
+Shares carry no category in their name, so they are **classified from
+AMFI's own half-yearly list** — the ranked list SEBI requires fund houses to
+use, fetched once during a price refresh and cached. A share is found by
+ticker, then ISIN, then company name, and the source is shown ("AMFI's list,
+Jan–Jun 2026"). Your own **Company size** tag always wins, and whatever is on
+neither — a foreign share, a missing ticker — is listed by name under the
+chart rather than guessed into a bucket.
+
+### Keep a trading journal
+The **Journal** is where shares are bought and sold, and every other page
+reads what it writes. A purchase is kept as its own dated parcel with its
+**charges** (brokerage and STT belong in the cost, or every return is
+overstated) and the **stop-loss** you committed to on the way in. A sale needs
+a **reason** — target, stop-loss, rebalancing, thesis broken, needed the money
+— because that is the only field that cannot be reconstructed later.
+
+Sales consume parcels oldest-first, which is the order the tax computation
+assumes, and each closed parcel is booked with its own holding period and a
+short- or long-term classification. A parcel with no recorded purchase date
+says **not known** rather than claiming a short-term gain on shares held for
+years.
+
+Positions are filed as **Core** (the long-term bet you add to monthly) or
+**Satellite** (the shorter technical trade), and deployed capital, unrealised
+and realised profit are shown for each and in total — so a run of satellite
+losses cannot hide inside a compounding core. Set it per position, or per
+purchase when the same company is both. Anything unassigned is shown as
+itself, never folded into Core.
+
+A parcel entered wrongly can be corrected or deleted, and everything derived
+from it follows: units held, average cost, the cashflow XIRR reads, and the
+profit on any part already sold. A sale can be undone. Closed trades are
+split into **exits on a stop** and **every other exit**, which is the
+question a stop-loss rule exists to answer.
+
+### See what you have actually earned
+**XIRR** — the money-weighted return, from the cashflows a statement carries —
+is on the Dashboard, overall and per holding. It is what your money earned,
+not what the funds returned, and it only appears for holdings with a recorded
+history.
+
+**Mutual funds since your first SIP.** The net-worth trend can only start on
+the day you first took a snapshot. A full-history statement lets the funds
+reach further back: each transaction's amount divided by its units is the NAV
+that day, so a monthly SIP carries its own monthly price series, and units
+held at any past month-end come straight from the purchases. The chart shows
+value against money invested, anchored at today's NAV, and says how much of
+any month rests on a price more than a quarter old. It is kept apart from the
+snapshots because it is reconstructed rather than observed, and it covers
+funds only — nothing records when your shares or deposits were bought.
 
 ### Understand your allocation
 Holdings roll up into buckets (equity, debt, gold, real estate, cash) which
@@ -318,6 +384,20 @@ change; either way both numbers you typed come out true.
 **Unrealised gains & losses** shows the long/short split and how many holdings
 are underwater.
 
+### Journal
+
+Record a purchase with its charges and stop-loss, or add to a position you
+already hold. **✎** on any parcel corrects it; **Sell** closes units
+oldest-first and asks why. The table at the top is your shares split into
+Core and Satellite — deployed, value, unrealised, realised and total — and
+**Closed trades** shows what stopping out actually did. **Cash moved in and
+out** is optional: it records money crossing between your bank and the pot,
+which differs from *deployed* by whatever is not yet invested.
+
+Funds are not in the Journal. They are maintained from statements, and a sale
+recorded by hand against a parcel the next import replaces would leave a
+closed trade pointing at nothing.
+
 ### Cashflow
 
 Enter each committed cost **as it is billed** — a ₹12,000 yearly subscription
@@ -394,8 +474,9 @@ thing a calculator like this cannot show you.
 
 - **Where your data is** — the real file paths, sizes and last-written times.
   Back those files up and you have backed up everything.
-- **What leaves this machine** — the four hosts the app can reach (AMFI for
-  NAVs, three Yahoo hosts for stock prices) and nothing else. **Test
+- **What leaves this machine** — the five hosts the app can reach (AMFI for
+  NAVs and its half-yearly company-size list, three Yahoo hosts for stock
+  prices) and nothing else. **Test
   connection** probes them and names the real cause when one fails. An unlisted
   host is refused in code before a connection is opened, not merely absent
   from a policy document.
@@ -441,7 +522,15 @@ Assumptions worth knowing, all of them editable:
   after which the figure is held flat and you are asked for a fresh one.
   Neither grows by contributions you record separately.
 - **Averages** — income and expenses are each divided by the number of
-  calendar months that actually carry entries, not by a fixed window.
+  months that actually carry entries, not by a fixed window. The month in
+  progress counts as the part of it that has elapsed: counted whole, logging
+  an expense on the 6th *lowered* the monthly average, and the FI target fell
+  with it. With only a few days of entries the span is floored at one month,
+  so ₹10,000 on the 6th is ₹10,000 so far rather than ₹50,000 a month.
+- **Positions** — shares are stored as purchase parcels and their units and
+  average cost are derived. Charges are part of the cost; sales consume the
+  oldest parcel first. Deployed capital is what the units *still held* cost,
+  so selling returns capital rather than leaving it counted forever.
 - **Expenses** exclude EMI (which is tracked separately) and include the
   monthly equivalent of recurring costs. That is also what post-FI spending
   looks like, which is why the FI page uses the same figure.
@@ -459,8 +548,11 @@ Assumptions worth knowing, all of them editable:
   5%/year; the EMI becomes investible when the loan closes; at FI the corpus
   is re-allocated to a conservative mix and withdrawals begin, rising with
   inflation.
-- **Long-term capital gains** — simplified: 12 months for listed equity and
-  equity-oriented funds, 24 otherwise. Confirm specifics with a CA.
+- **Long-term capital gains** — simplified: 12 months for listed securities,
+  24 otherwise, per the Finance (No. 2) Act 2024, measured per parcel. A
+  parcel with no recorded purchase date is reported as *not known*. Debt
+  funds bought after March 2023 are taxed at slab rates whatever the holding
+  period. Confirm specifics with a CA.
 - **Life cover** — 12× annual income plus outstanding debt. Investment-linked
   policies are counted at their stated sum assured, which flatters them.
 
@@ -486,7 +578,7 @@ asset-class level, never specific products — and labelled educational.
   that only holds while the boundary is actually shut, so it is tested.
 - **Your data never leaves your machine.** SQLite files on disk, no accounts,
   no cloud, no telemetry. Outbound requests go only to AMFI and Yahoo for
-  prices — and the **Privacy** page shows you every one of them as it
+  prices and the public company-size list — and the **Privacy** page shows you every one of them as it
   happens, so this is checkable rather than a promise. Nothing about your
   portfolio is ever sent: the NAV request asks for the whole public price
   list and picks your funds out of it locally.
@@ -551,7 +643,9 @@ misspelled field is rejected instead of silently ignored, and
 CI runs both, plus a frontend build, on every push and pull request — see
 `.github/workflows/ci.yml`.
 
-354 tests. The pure analytics, FI and calculator modules, the importers,
+545 tests. The pure analytics, FI and calculator modules, the lot ledger and
+its corrections, statement and tradebook import — tested mostly on the ways
+they could silently double a portfolio — the fund-history reconstruction,
 profiles, privacy — and `test_api.py`, which goes through HTTP rather than around it,
 because the host check, the CORS configuration, profile selection from the
 cookie and the session lifecycle only exist on the request path.

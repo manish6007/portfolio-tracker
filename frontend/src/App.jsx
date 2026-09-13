@@ -8,13 +8,14 @@ import Dashboard from './pages/Dashboard'
 import ExportPage from './pages/ExportPage'
 import FI from './pages/FI'
 import Insurance from './pages/Insurance'
+import Journal from './pages/Journal'
 import Loans from './pages/Loans'
 import Portfolio from './pages/Portfolio'
 import Privacy from './pages/Privacy'
 import Settings from './pages/Settings'
 
-const TABS = ['Dashboard', 'Portfolio', 'Cashflow', 'Loans', 'Insurance', 'FI',
-  'Calculators', 'Export', 'Privacy', 'Settings']
+const TABS = ['Dashboard', 'Portfolio', 'Journal', 'Cashflow', 'Loans',
+  'Insurance', 'FI', 'Calculators', 'Export', 'Privacy', 'Settings']
 
 export default function App() {
   const [tab, setTab] = useState('Dashboard')
@@ -72,6 +73,7 @@ export default function App() {
           <>
             {tab === 'Dashboard' && <Dashboard {...ctx} />}
             {tab === 'Portfolio' && <Portfolio {...ctx} />}
+            {tab === 'Journal' && <Journal {...ctx} />}
             {tab === 'Cashflow' && <Cashflow {...ctx} />}
             {tab === 'Loans' && <Loans {...ctx} />}
             {tab === 'Insurance' && <Insurance {...ctx} />}

@@ -14,6 +14,7 @@ export default function ImportWizard({ meta, owners, reload, onDone }) {
   const [assetClass, setAssetClass] = useState('stock')
   const [owner, setOwner] = useState('')
   const [password, setPassword] = useState('')
+  const [bookName, setBookName] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const fileRef = useRef()
@@ -33,7 +34,38 @@ export default function ImportWizard({ meta, owners, reload, onDone }) {
       try { d = (await r.json()).detail || d } catch { /* ignore */ }
       setMsg(d); setPreview(null); setBusy(false); return
     }
-    setPreview(await r.json())
+    const data = await r.json()
+    setPreview(data)
+    if (data.kind === 'tradebook') setBookName(data.book || '')
+    setBusy(false)
+  }
+
+  // A tradebook is replayed rather than mapped: each trade becomes a parcel
+  // or closes one, so the shares end up with the purchase dates they have
+  // never had. Re-importing under the same book name replaces what that
+  // book wrote before, and leaves every other broker's parcels alone.
+  const commitBook = async () => {
+    setBusy(true)
+    try {
+      const res = await api.post('/api/import/tradebook', {
+        book: bookName.trim() || preview.book,
+        groups: preview.groups,
+        owner: owner || (owners[0]?.name || 'Me'),
+      })
+      const bits = [`${res.parcels} purchases recorded`]
+      if (res.closed) bits.push(`${res.closed} closed against them`)
+      if (res.merged) {
+        bits.push(`${res.merged} were already entered by hand and were not`
+          + ' added twice')
+      }
+      if (res.added) bits.push(`${res.added} new holdings`)
+      setMsg(bits.join(' · ') + '.'
+        + (res.warnings.length ? ' ' + res.warnings.join(' ') : ''))
+      setPreview(null); setFile(null)
+      if (fileRef.current) fileRef.current.value = ''
+      reload()
+      if (onDone) onDone()
+    } catch (e) { setMsg('Error: ' + e.message) }
     setBusy(false)
   }
 
@@ -64,6 +96,9 @@ export default function ImportWizard({ meta, owners, reload, onDone }) {
     if (onDone) onDone()
   }
 
+  const isBook = preview?.kind === 'tradebook'
+  const bookTrades = isBook
+    ? preview.groups.reduce((a, g) => a + g.trades.length, 0) : 0
   const isPdf = (file?.name || '').toLowerCase().endsWith('.pdf')
   const isCas = preview?.source === 'cas'
   // Only the detailed statement carries nominees and a transaction history.
@@ -123,7 +158,63 @@ export default function ImportWizard({ meta, owners, reload, onDone }) {
 
       {msg && <div className="notice">{msg}</div>}
 
-      {preview && (
+      {isBook && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <h2>This is a tradebook, not a list of holdings</h2>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            {bookTrades} trades across {preview.groups.length} companies. Each
+            one is replayed into the ledger, so your shares get the purchase
+            dates they have never had and every sale is booked against the
+            parcel it actually closed — which is what makes realised gains and
+            holding periods real rather than estimated.
+          </p>
+          {preview.notes?.length > 0 && (
+            <div className="notice">{preview.notes.join(' ')}</div>
+          )}
+          <div className="row">
+            <label className="field">Name this book
+              <input value={bookName} style={{ width: 230 }}
+                onChange={(e) => setBookName(e.target.value)} />
+            </label>
+            <button className="btn" disabled={busy} onClick={commitBook}>
+              {busy ? 'Importing…' : `Import ${bookTrades} trades`}
+            </button>
+          </div>
+          <p className="small muted">
+            The name is how a re-import knows which parcels are its own. Use
+            the same one each time you upload this broker&rsquo;s book — a
+            newer download then replaces the older one instead of adding to
+            it — and a different one for each broker, so a share held at two
+            keeps both sets of parcels. <b>zerodha</b> and <b>kotak</b> do
+            the job.
+          </p>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Company</th><th>Ticker</th>
+                  <th className="num">Trades</th><th>From</th><th>To</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.groups.map((g) => (
+                  <tr key={g.symbol + g.isin}>
+                    <td>{g.name}</td>
+                    <td className="small">{g.symbol || '—'}</td>
+                    <td className="num">{g.trades.length}</td>
+                    <td className="small">{g.trades[0]?.date}</td>
+                    <td className="small">
+                      {g.trades[g.trades.length - 1]?.date}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {preview && !isBook && (
         <>
           {preview.source === 'table' && (
             <div className="card" style={{ marginTop: 12 }}>

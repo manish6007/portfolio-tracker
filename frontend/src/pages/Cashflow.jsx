@@ -4,10 +4,15 @@ import Warnings from '../components/Warnings'
 
 const today = () => new Date().toISOString().slice(0, 10)
 
-const basis = (n) =>
-  !n ? 'no entries yet'
-    : n === 1 ? 'based on 1 month of entries'
-      : `average of ${n} months of entries`
+// The month in progress counts as the part of it that has elapsed, so this
+// is rarely a whole number. Shown to one decimal rather than rounded, since
+// "1 month" when it is really 1.2 is what made the average look wrong.
+const basis = (n) => {
+  if (!n) return 'no entries yet'
+  if (n === 1) return 'based on 1 month of entries'
+  const shown = Number.isInteger(n) ? n : n.toFixed(1)
+  return `average over ${shown} months, counting this month so far`
+}
 
 function EntryForm({ kind, owners, onDone }) {
   const isIncome = kind === 'income'
@@ -148,8 +153,9 @@ export default function Cashflow({ summary, owners, reload }) {
 
       {cf.expense_months > 0 && cf.income_months > cf.expense_months && (
         <div className="notice">
-          Expenses are logged for {cf.expense_months} month
-          {cf.expense_months > 1 ? 's' : ''} but income for {cf.income_months} —
+          Expenses are logged for {(+cf.expense_months).toFixed(1)} month
+          {cf.expense_months > 1 ? 's' : ''} but income for{' '}
+          {(+cf.income_months).toFixed(1)} —
           each is averaged over its own months, so the figures above are per-month
           either way. Log the missing months' expenses for a truer surplus.
         </div>
